@@ -63,10 +63,96 @@ IMPORTS.mkdir(parents=True, exist_ok=True)
 FOLDER_LOCK = threading.RLock()
 PROJECT_CREATE_LOCK = threading.Lock()
 FOLDER_INDEX_VERSION = 1
+TODO_LOCK = threading.RLock()
+TODO_INDEX_VERSION = 1
 
 
 def folder_index_path() -> Path:
     return WORKSPACES / ".workspace-index.json"
+
+
+def todo_index_path() -> Path:
+    return WORKSPACES / ".todos.json"
+
+
+def _empty_todo_index() -> dict:
+    return {"version": TODO_INDEX_VERSION, "projects": [], "read": []}
+
+
+def load_todo_index() -> dict:
+    with TODO_LOCK:
+        try:
+            raw = json.loads(todo_index_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            raw = _empty_todo_index()
+        if not isinstance(raw, dict):
+            raw = _empty_todo_index()
+        projects = []
+        for project in raw.get("projects", []):
+            value = str(project or "").strip()
+            if value and value not in projects:
+                projects.append(value)
+        read = []
+        for project in raw.get("read", []):
+            value = str(project or "").strip()
+            if value and value not in projects and value not in read:
+                read.append(value)
+        return {"version": TODO_INDEX_VERSION, "projects": projects, "read": read}
+
+
+def save_todo_index(index: dict) -> None:
+    with TODO_LOCK:
+        target = todo_index_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_suffix(".tmp")
+        temporary.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(target)
+
+
+def set_project_todo(project_name: str, state: str) -> str:
+    name = slug(project_name)
+    if isinstance(state, bool):
+        state = "todo" if state else "read"
+    with TODO_LOCK:
+        index = load_todo_index()
+        projects = [project for project in index["projects"] if project != name]
+        read = [project for project in index["read"] if project != name]
+        if state == "todo":
+            projects.append(name)
+        elif state == "read":
+            read.append(name)
+        elif state != "clear":
+            raise ValueError("不支持的 TODO 状态")
+        index["projects"] = projects
+        index["read"] = read
+        save_todo_index(index)
+        return state
+
+
+def rename_project_todo(old_name: str, new_name: str) -> None:
+    old_slug = slug(old_name)
+    new_slug = slug(new_name)
+    with TODO_LOCK:
+        index = load_todo_index()
+        if old_slug not in index["projects"]:
+            return
+        index["projects"] = [new_slug if project == old_slug else project for project in index["projects"]]
+        index["read"] = [new_slug if project == old_slug else project for project in index["read"]]
+        index["projects"] = list(dict.fromkeys(index["projects"]))
+        index["read"] = list(dict.fromkeys(index["read"]))
+        save_todo_index(index)
+
+
+def remove_project_todo(project_name: str) -> None:
+    name = slug(project_name)
+    with TODO_LOCK:
+        index = load_todo_index()
+        updated = [project for project in index["projects"] if project != name]
+        updated_read = [project for project in index["read"] if project != name]
+        if updated != index["projects"] or updated_read != index["read"]:
+            index["projects"] = updated
+            index["read"] = updated_read
+            save_todo_index(index)
 
 
 def _empty_folder_index() -> dict:
@@ -546,6 +632,9 @@ def project_translation_files(project_dir: Path) -> list[Path]:
 def list_projects() -> list[dict]:
     projects = []
     folder_data = folder_catalog()
+    todo_index = load_todo_index()
+    todo_projects = set(todo_index["projects"])
+    read_projects = set(todo_index["read"])
     folders_by_id = {folder["id"]: folder for folder in folder_data["folders"]}
     for directory in sorted(WORKSPACES.iterdir() if WORKSPACES.exists() else [], key=lambda item: item.stat().st_mtime, reverse=True):
         if not directory.is_dir() or directory.name.startswith("."):
@@ -569,6 +658,8 @@ def list_projects() -> list[dict]:
             folder_ids = folder_data["project_folders"].get(manifest.get("name") or directory.name, [])
             manifest["folder_ids"] = folder_ids
             manifest["folders"] = [folders_by_id[folder_id] for folder_id in folder_ids if folder_id in folders_by_id]
+            manifest["todo"] = (manifest.get("name") or directory.name) in todo_projects
+            manifest["todo_read"] = (manifest.get("name") or directory.name) in read_projects
             projects.append(manifest)
     return projects
 
@@ -626,6 +717,7 @@ def rename_project(old_name: str, new_name: str) -> dict:
             if task.get("project_slug") == old_slug:
                 task["project_slug"] = new_slug
     rename_project_folders(old_slug, new_slug)
+    rename_project_todo(old_slug, new_slug)
     return {"name": new_slug, "path": new_path}
 
 
@@ -641,6 +733,7 @@ def delete_project(name: str) -> dict:
     with TASKS.lock:
         TASKS.tasks = {task_id: task for task_id, task in TASKS.tasks.items() if task.get("project_slug") != project_slug}
     remove_project_folders(project_slug)
+    remove_project_todo(project_slug)
     return {"name": project_slug}
 
 
@@ -1588,6 +1681,9 @@ class Handler(BaseHTTPRequestHandler):
             for project in projects:
                 project["codex_status"] = CODEX_RUNS.project_status(project.get("name", ""))
             self.send_json({"projects": projects})
+        elif parsed.path == "/api/todos":
+            todo_projects = set(load_todo_index()["projects"])
+            self.send_json({"projects": [project for project in list_projects() if project.get("name") in todo_projects]})
         elif parsed.path == "/api/project":
             self.send_json(project_details(parse_qs(parsed.query).get("name", [""])[0]))
         elif parsed.path == "/api/project/codex-runs":
@@ -1667,6 +1763,14 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     raise ValueError("不支持的文件夹归类模式")
                 self.send_json({"project": project_name, "folder_ids": memberships})
+            elif parsed.path == "/api/project/todo":
+                payload = self.read_json()
+                project_name = slug(payload.get("project", ""))
+                if not project_manifest(safe_project_dir(project_name)):
+                    raise ValueError(f"找不到项目：{project_name}")
+                state = str(payload.get("state") or ("todo" if payload.get("enabled") else "read"))
+                result = set_project_todo(project_name, state)
+                self.send_json({"project": project_name, "state": result})
             elif parsed.path == "/api/retry":
                 self.send_json(enqueue_retry(self.read_json().get("name", "")), 202)
             elif parsed.path == "/api/codex/run":

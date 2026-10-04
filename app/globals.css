@@ -137,3 +137,17 @@ dialog.detail-dialog::backdrop { background:rgba(18,39,43,.34); backdrop-filter:
 .project-created { color:var(--muted); font-size:11px; white-space:nowrap; }
 .detail-paper-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:6px; }
 .translation-button { display:inline-flex; align-items:center; gap:5px; font-size:11px; }
+
+.queue-tabs { display:inline-flex; align-items:stretch; gap:3px; margin-bottom:16px; padding:3px; border:1px solid var(--line); border-radius:10px; background:#edf4f2; }
+.queue-tab { display:inline-flex; align-items:center; gap:7px; min-height:36px; border:1px solid transparent; border-radius:7px; background:transparent; color:#657779; padding:7px 12px; font-size:12px; font-weight:700; }
+.queue-tab:hover { color:var(--accent-dark); }
+.queue-tab.active { border-color:#c9e5dc; background:#fff; color:var(--accent-dark); box-shadow:0 2px 7px rgba(18,53,58,.08); }
+.queue-tab span { min-width:19px; padding:1px 5px; border-radius:10px; background:#dceae6; color:#67817a; font-size:10px; text-align:center; }
+.queue-tab.active span { background:var(--accent-soft); color:var(--accent-dark); }
+.task-card small { display:flex; align-items:center; gap:3px; }
+.codex-task-card { cursor:pointer; transition:border-color .15s, box-shadow .15s, transform .15s; }
+.codex-task-card:hover,.codex-task-card:focus-visible { border-color:#abd7cc; box-shadow:0 7px 20px rgba(25,123,104,.11); outline:0; }
+.codex-task-card:active { transform:translateY(1px); }
+.codex-task-card strong svg { color:var(--accent-dark); }
+.task-detail-hint { display:inline-flex; align-items:center; gap:1px; margin-left:auto; color:var(--accent-dark); font-weight:700; }
+@media (max-width:720px) { .queue-tabs { display:flex; width:100%; }.queue-tab { flex:1; justify-content:center; padding-right:8px; padding-left:8px; } }

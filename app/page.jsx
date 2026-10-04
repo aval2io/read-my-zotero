@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen, Check, ChevronDown, ChevronRight, CircleHelp, Folder, FolderOpen,
   Library, ListChecks, LoaderCircle, Plus, RefreshCw, Search, Settings2,
-  Sparkles, Tag, X, Zap, Copy, ExternalLink, Terminal, FileText, Languages, Play,
+  Tag, X, Zap, Copy, ExternalLink, Terminal, FileText, Languages, Play,
   ArrowUpDown,
   Square, Eye, Trash2
 } from 'lucide-react';
@@ -246,7 +246,37 @@ function CreateProjectView({ folders, onCreate }) {
   </>;
 }
 
-function TasksView({ tasks, refresh }) { return <><Header eyebrow="QUEUE" title="任务队列" onRefresh={refresh} /><div className="queue-summary"><span><ListChecks size={17} />{tasks.length} 个任务</span><span>PDF 提取与 Codex 任务会在这里显示进度</span></div><section className="task-list">{tasks.length ? tasks.map(task => <article className="task-card" key={`${task.id}-${task.run_id || ''}`}><div><strong>{task.task_type === 'codex' && <Sparkles size={15} />}{task.paper_slug}</strong><p>{task.message || ''}</p></div><span className={cn('status', task.status)}><i />{task.status}</span><div className="progress"><i style={{ width: `${task.progress || 0}%` }} /></div><small>{task.project_slug} · {task.progress || 0}%</small></article>) : <div className="empty"><ListChecks size={30} /><strong>任务队列为空</strong><span>从 Zotero 库创建工作区后，任务会显示在这里。</span></div>}</section></>; }
+function taskStatusLabel(status) {
+  return { queued: '排队中', running: '处理中', cancelling: '正在取消', completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' }[status] || status;
+}
+
+function TasksView({ tasks, refresh, onOpenCodexTask }) {
+  const [category, setCategory] = useState('processing');
+  const processingTasks = tasks.filter(task => task.task_type !== 'codex');
+  const codexTasks = tasks.filter(task => task.task_type === 'codex');
+  const visibleTasks = category === 'codex' ? codexTasks : processingTasks;
+
+  return <>
+    <Header eyebrow="QUEUE" title="任务队列" onRefresh={refresh} />
+    <div className="queue-tabs" role="tablist" aria-label="任务类型">
+      <button className={cn('queue-tab', category === 'processing' && 'active')} role="tab" aria-selected={category === 'processing'} onClick={() => setCategory('processing')}><FileText size={15} />提取 MD / 翻译<span>{processingTasks.length}</span></button>
+      <button className={cn('queue-tab', category === 'codex' && 'active')} role="tab" aria-selected={category === 'codex'} onClick={() => setCategory('codex')}><Terminal size={15} />执行 Codex<span>{codexTasks.length}</span></button>
+    </div>
+    <div className="queue-summary"><span><ListChecks size={17} />{visibleTasks.length} 个任务</span><span>{category === 'codex' ? '点击任务可查看对应的 Codex 会话' : 'PDF 提取与中文翻译任务'}</span></div>
+    <section className="task-list">
+      {visibleTasks.length ? visibleTasks.map(task => {
+        const isCodex = task.task_type === 'codex';
+        const taskCard = <article className={cn('task-card', isCodex && 'codex-task-card')} key={`${task.id}-${task.run_id || ''}`} onClick={isCodex ? () => onOpenCodexTask(task) : undefined} onKeyDown={isCodex ? event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpenCodexTask(task); } } : undefined} tabIndex={isCodex ? 0 : undefined} role={isCodex ? 'button' : undefined}>
+          <div><strong>{isCodex ? <Terminal size={15} /> : <FileText size={15} />}{isCodex ? 'Codex 会话' : task.paper_slug}</strong><p>{task.message || ''}</p></div>
+          <span className={cn('status', task.status)}><i />{taskStatusLabel(task.status)}</span>
+          <div className="progress"><i style={{ width: `${task.progress || 0}%` }} /></div>
+          <small>{task.project_slug} · {task.progress || 0}%{isCodex && <span className="task-detail-hint">查看 Codex 会话 <ChevronRight size={13} /></span>}</small>
+        </article>;
+        return taskCard;
+      }) : <div className="empty"><ListChecks size={30} /><strong>{category === 'codex' ? '暂无 Codex 任务' : '暂无提取或翻译任务'}</strong><span>创建项目或启动 Codex 后，任务会显示在这里。</span></div>}
+    </section>
+  </>;
+}
 
 function ProjectDetail({ details, onClose, onOpenZotero, onDeleteProject }) {
   const project = details?.project || {};
@@ -272,7 +302,11 @@ function ProjectDetail({ details, onClose, onOpenZotero, onDeleteProject }) {
     ]).then(([outputData, runData]) => {
       if (cancelled) return;
       setOutputs(outputData.outputs || []);
-      setRuns(runData.runs || []);
+      const availableRuns = runData.runs || [];
+      const requestedRun = details.codexRunId && availableRuns.some(run => run.id === details.codexRunId) ? details.codexRunId : '';
+      setRuns(availableRuns);
+      setCodexOpen(Boolean(details.openCodex));
+      setActiveRunId(requestedRun || (details.openCodex ? availableRuns[0]?.id || '' : ''));
     }).catch(error => { if (!cancelled) setNotice(error.message); });
     return () => { cancelled = true; };
   }, [details, projectName]);
@@ -487,7 +521,8 @@ export default function Page() {
       await Promise.all([loadTasks(), loadWorkspace()]); setView('tasks');
     } catch (e) { setError(e.message); }
   };
-  const openProject = async name => { try { setError(''); const data = await api(`/api/project?name=${encodeURIComponent(name)}`); setProjectDetails(data); } catch (e) { setError(e.message); } };
+  const openProject = async (name, options = {}) => { try { setError(''); const data = await api(`/api/project?name=${encodeURIComponent(name)}`); setProjectDetails({ ...data, openCodex: Boolean(options.codexRunId), codexRunId: options.codexRunId || '' }); } catch (e) { setError(e.message); } };
+  const openCodexTask = task => openProject(task.project_slug, { codexRunId: task.run_id });
   const deleteProject = async name => {
     setDeleteTarget(''); setProjectDetails(null); setError('');
     try { await Promise.all([loadWorkspace(), loadTasks()]); }
@@ -496,5 +531,5 @@ export default function Page() {
   const requestProjectDeletion = name => { setProjectDetails(null); setDeleteTarget(name); };
   const workspaceSidebar = <section className="sidebar-block"><div className="sidebar-block-head"><span>工作区目录</span><button title="新建目录" aria-label="新建目录" onClick={() => setFolderDialogOpen(true)}><Plus size={15} /></button></div><WorkspaceTree folders={folders} counts={{ total: projects.length, unfiled: projects.filter(item => !(item.folder_ids || []).length).length, byFolder: folderData.counts }} selected={folderId} onSelect={value => { setFolderId(value); setView('projects'); }} /></section>;
   const taskCount = tasks.filter(task => ['queued', 'running', 'cancelling'].includes(task.status)).length;
-  return <AppShell view={view} setView={setView} taskCount={taskCount} workspaceSidebar={workspaceSidebar}>{importResult && <div className="queue-summary" role="status"><Check size={16} /><span>{importResult}</span><button className="icon-button" onClick={() => setImportResult('')} aria-label="关闭导入结果"><X size={15} /></button></div>}{error && <div className="error-banner"><CircleHelp size={16} />{error}<button onClick={() => setError('')}><X size={15} /></button></div>}{view === 'settings' && <SettingsView />}{view === 'projects' && <ProjectsView projects={projects} folders={folders} folderData={folderData} folderId={folderId} setFolderId={setFolderId} setView={setView} refresh={refresh} onOpenProject={openProject} onDeleteProject={requestProjectDeletion} />}{view === 'zotero' && <ZoteroView collections={collections} folders={folders} selectedCollection={selectedCollection} setSelectedCollection={setSelectedCollection} collectionData={collectionData} refresh={refresh} onCreate={createFromZotero} />}{view === 'tasks' && <TasksView tasks={tasks} refresh={async () => { await loadTasks(); await loadWorkspace(); }} />}{view === 'create' && <CreateProjectView folders={folders} onCreate={createFromZotero} />}<ProjectDetail details={projectDetails} onClose={() => setProjectDetails(null)} onOpenZotero={() => { setProjectDetails(null); setView('zotero'); }} onDeleteProject={requestProjectDeletion} />{deleteTarget && <DeleteProjectDialog projectName={deleteTarget} onClose={() => setDeleteTarget('')} onDeleted={deleteProject} />}{folderDialogOpen && <CreateFolderDialog folders={folders} onCreated={loadWorkspace} onClose={() => setFolderDialogOpen(false)} />}</AppShell>;
+  return <AppShell view={view} setView={setView} taskCount={taskCount} workspaceSidebar={workspaceSidebar}>{importResult && <div className="queue-summary" role="status"><Check size={16} /><span>{importResult}</span><button className="icon-button" onClick={() => setImportResult('')} aria-label="关闭导入结果"><X size={15} /></button></div>}{error && <div className="error-banner"><CircleHelp size={16} />{error}<button onClick={() => setError('')}><X size={15} /></button></div>}{view === 'settings' && <SettingsView />}{view === 'projects' && <ProjectsView projects={projects} folders={folders} folderData={folderData} folderId={folderId} setFolderId={setFolderId} setView={setView} refresh={refresh} onOpenProject={openProject} onDeleteProject={requestProjectDeletion} />}{view === 'zotero' && <ZoteroView collections={collections} folders={folders} selectedCollection={selectedCollection} setSelectedCollection={setSelectedCollection} collectionData={collectionData} refresh={refresh} onCreate={createFromZotero} />}{view === 'tasks' && <TasksView tasks={tasks} refresh={async () => { await loadTasks(); await loadWorkspace(); }} onOpenCodexTask={openCodexTask} />}{view === 'create' && <CreateProjectView folders={folders} onCreate={createFromZotero} />}<ProjectDetail details={projectDetails} onClose={() => setProjectDetails(null)} onOpenZotero={() => { setProjectDetails(null); setView('zotero'); }} onDeleteProject={requestProjectDeletion} />{deleteTarget && <DeleteProjectDialog projectName={deleteTarget} onClose={() => setDeleteTarget('')} onDeleted={deleteProject} />}{folderDialogOpen && <CreateFolderDialog folders={folders} onCreated={loadWorkspace} onClose={() => setFolderDialogOpen(false)} />}</AppShell>;
 }

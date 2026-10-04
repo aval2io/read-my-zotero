@@ -133,7 +133,7 @@ dialog.detail-dialog::backdrop { background:rgba(18,39,43,.34); backdrop-filter:
 @media (max-width:720px) { .project-toolbar-actions { width:100%; justify-content:space-between; } }
 
 .project-indicator { display:inline-flex; align-items:center; justify-content:center; gap:4px; color:var(--muted); font-size:11px; white-space:nowrap; }
-.project-indicator.is-ready { color:var(--accent-dark); }
+.project-indicator.is-ready { color:#9a741f; background:#fff5cc; border:1px solid #eadb9b; border-radius:999px; padding:3px 7px; font-weight:700; }
 .project-created { color:var(--muted); font-size:11px; white-space:nowrap; }
 .detail-paper-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:6px; }
 .translation-button { display:inline-flex; align-items:center; gap:5px; font-size:11px; }
@@ -142,7 +142,7 @@ dialog.detail-dialog::backdrop { background:rgba(18,39,43,.34); backdrop-filter:
 .nav-item svg { flex:0 0 17px; }
 .todo-button { display:inline-flex; align-items:center; justify-content:center; justify-self:center; min-height:30px; width:auto !important; border:1px solid #c8ddd8; border-radius:7px; background:#f4faf8; color:var(--accent-dark); padding:5px 8px; font-size:11px; font-weight:700; white-space:nowrap; }
 .todo-button:hover { border-color:#91c8ba; background:var(--accent-soft); }
-.todo-button.is-todo { border-color:#9acfc0; background:var(--accent-soft); color:var(--accent-dark); cursor:default; }
+.todo-button.is-todo { border-color:#9acfc0; background:var(--accent-soft); color:var(--accent-dark); cursor:pointer; }
 .todo-button.remove-todo { border-color:#e6cfc0; background:#fff8f2; color:#9b6947; }
 .todo-button.remove-todo:hover { border-color:#d9ac92; background:#fff0e7; color:#875337; }
 .todo-button.is-read { border-color:#d8c59c; background:#fff9e9; color:#987331; cursor:pointer; }

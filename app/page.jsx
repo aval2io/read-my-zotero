@@ -526,6 +526,7 @@ function ProjectsView({
           visible.map((project) => {
             const [status, label] = projectStatus(project);
             const projectName = project.name || project.citation_key;
+            const paperTitle = project.metadata?.title || project.title || project.papers?.[0]?.metadata?.title || project.papers?.[0]?.title || projectName;
             const isRead = project.todo_read && !project.todo;
             const todoLabel = todoOnly
               ? "移除TODO"
@@ -537,7 +538,7 @@ function ProjectsView({
             const todoState = todoOnly
               ? "read"
               : project.todo
-                ? null
+                ? "read"
                 : isRead
                   ? "clear"
                   : "todo";
@@ -554,6 +555,7 @@ function ProjectsView({
                   <div>
                     <button
                       className="project-title-link"
+                      title={paperTitle}
                       onClick={() => onOpenProject(projectName)}
                     >
                       {projectName}
@@ -580,12 +582,11 @@ function ProjectsView({
                     todoOnly
                       ? "移出 TODO 队列并标记为已读"
                       : project.todo
-                        ? "已加入 TODO 队列"
+                        ? "完成阅读并移出 TODO 队列"
                         : isRead
                           ? "清除已读状态"
                           : "加入 TODO 队列"
                   }
-                  disabled={!todoState}
                 >
                   {todoLabel}
                 </button>

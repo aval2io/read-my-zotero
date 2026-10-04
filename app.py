@@ -496,6 +496,53 @@ def project_manifest(project_dir: Path) -> dict | None:
         return None
 
 
+def timestamp_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def ensure_project_created_at(project_dir: Path, manifest: dict) -> dict:
+    """Keep a creation timestamp available for legacy manifests."""
+    if manifest.get("created_at"):
+        return manifest
+    manifest = dict(manifest)
+    try:
+        fallback = (project_dir / "manifest.json").stat().st_mtime
+    except OSError:
+        fallback = project_dir.stat().st_mtime
+    manifest["created_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(fallback))
+    try:
+        (project_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+    return manifest
+
+
+def project_output_files(project_dir: Path) -> list[Path]:
+    """Return files in a project's root and per-paper outputs directories."""
+    output_dirs = [project_dir / "outputs"]
+    papers_dir = project_dir / "papers"
+    if papers_dir.is_dir():
+        output_dirs.extend(path for path in papers_dir.glob("*/outputs") if path.is_dir())
+    files: list[Path] = []
+    for output_dir in output_dirs:
+        if not output_dir.is_dir():
+            continue
+        try:
+            files.extend(path for path in output_dir.rglob("*") if path.is_file())
+        except OSError:
+            continue
+    return files
+
+
+def project_translation_files(project_dir: Path) -> list[Path]:
+    """Return existing translation.md files in a project."""
+    candidates = [project_dir / "translation.md"]
+    papers_dir = project_dir / "papers"
+    if papers_dir.is_dir():
+        candidates.extend(path for path in papers_dir.glob("*/translation.md"))
+    return [path for path in candidates if path.is_file()]
+
+
 def list_projects() -> list[dict]:
     projects = []
     folder_data = folder_catalog()
@@ -505,6 +552,7 @@ def list_projects() -> list[dict]:
             continue
         manifest = project_manifest(directory)
         if manifest:
+            manifest = ensure_project_created_at(directory, manifest)
             mtimes = [directory.stat().st_mtime]
             try:
                 mtimes.extend(item.stat().st_mtime for item in directory.rglob("*") if item.is_file())
@@ -514,6 +562,10 @@ def list_projects() -> list[dict]:
             manifest["path"] = str(directory)
             manifest["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(max(mtimes)))
             manifest["article_count"] = len(manifest.get("papers", [])) if manifest.get("project_type") == "collection" else 1
+            # These values are derived from the filesystem so the project list
+            # stays accurate when Codex creates or removes artifacts directly.
+            manifest["output_count"] = len(project_output_files(directory))
+            manifest["translation_exists"] = bool(project_translation_files(directory))
             folder_ids = folder_data["project_folders"].get(manifest.get("name") or directory.name, [])
             manifest["folder_ids"] = folder_ids
             manifest["folders"] = [folders_by_id[folder_id] for folder_id in folder_ids if folder_id in folders_by_id]
@@ -665,6 +717,7 @@ def project_details(project_name: str) -> dict:
     root = project_manifest(project_dir)
     if not root:
         raise ValueError(f"找不到项目：{name}")
+    root = ensure_project_created_at(project_dir, root)
     papers: list[dict] = []
     if root.get("project_type") == "paper":
         papers.append({
@@ -673,6 +726,7 @@ def project_details(project_name: str) -> dict:
             "metadata": metadata_for_paper(root, project_dir),
             "full_exists": (project_dir / "full.md").exists(),
             "translation_exists": (project_dir / "translation.md").exists(),
+            "translation_path": "translation.md" if (project_dir / "translation.md").is_file() else None,
         })
     else:
         for item in root.get("papers", []):
@@ -685,12 +739,16 @@ def project_details(project_name: str) -> dict:
                 "metadata": metadata_for_paper(child or item, paper_dir),
                 "full_exists": (paper_dir / "full.md").exists(),
                 "translation_exists": (paper_dir / "translation.md").exists(),
+                "translation_path": f"papers/{citation_key}/translation.md" if (paper_dir / "translation.md").is_file() else None,
             })
     folder_data = folder_catalog()
     folder_ids = folder_data["project_folders"].get(name, [])
     root = dict(root)
     root["folder_ids"] = folder_ids
     root["folders"] = [folder for folder in folder_data["folders"] if folder["id"] in folder_ids]
+    root["output_count"] = len(project_output_files(project_dir))
+    root["translation_exists"] = bool(project_translation_files(project_dir))
+    root["translation_path"] = "translation.md" if (project_dir / "translation.md").is_file() else None
     return {"project": root, "path": str(project_dir), "papers": papers}
 
 
@@ -777,11 +835,13 @@ class TaskManager:
         self._update(task["id"], progress=18, message="读取源文件并写入 manifest")
         metadata = task.get("metadata") or {}
         source_hash = sha256(source)
+        existing_manifest = project_manifest(project_dir) or {}
         manifest = {
             "schema_version": 1,
             "project_type": task["project_type"],
             "name": task["project_slug"],
             "path": str(project_dir),
+            "created_at": existing_manifest.get("created_at") or task.get("created_at") or timestamp_now(),
             "citation_key": task["paper_slug"],
             "tags": task.get("tags", []),
             "source": {"path": str(source), "sha256": source_hash, "zotero_item_key": metadata.get("zotero_item_key")},
@@ -1000,6 +1060,21 @@ def project_output_path(project_name: str, relative_path: str) -> Path:
         raise ValueError("产出文件路径无效") from exc
     if not candidate.is_file():
         raise ValueError("产出文件不存在")
+    return candidate
+
+
+def project_translation_path(project_name: str, relative_path: str) -> Path:
+    """Resolve an existing translation.md path inside a project."""
+    project_dir = safe_project_dir(project_name).resolve()
+    if not project_manifest(project_dir):
+        raise ValueError(f"找不到项目：{slug(project_name)}")
+    candidate = (project_dir / str(relative_path or "")).resolve()
+    try:
+        candidate.relative_to(project_dir)
+    except ValueError as exc:
+        raise ValueError("翻译文件路径无效") from exc
+    if candidate.name != "translation.md" or not candidate.is_file():
+        raise ValueError("翻译文件不存在")
     return candidate
 
 
@@ -1394,7 +1469,8 @@ def _create_project(payload: dict) -> dict:
     if project_type == "collection":
         (project_dir / "papers").mkdir(exist_ok=True)
         (project_dir / "outputs").mkdir(exist_ok=True)
-    root_manifest = existing_manifest or {"schema_version": 1, "project_type": project_type, "name": name, "tags": payload.get("tags", []), "papers": [], "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+    root_manifest = existing_manifest or {"schema_version": 1, "project_type": project_type, "name": name, "tags": payload.get("tags", []), "papers": [], "created_at": timestamp_now()}
+    root_manifest.setdefault("created_at", timestamp_now())
     root_manifest["tags"] = payload.get("tags", root_manifest.get("tags", []))
     root_manifest["name"] = name
     root_manifest["project_type"] = project_type
@@ -1421,9 +1497,10 @@ def _create_project(payload: dict) -> dict:
             "title": paper.get("title") or path.stem,
             "metadata": paper,
             "source": {"path": str(path), "zotero_item_key": paper.get("zotero_item_key")},
+            "created_at": timestamp_now(),
         })
         reusable = find_reusable_artifacts(path, paper_slug)
-        task = {"id": uuid.uuid4().hex, "project_slug": name, "project_type": project_type, "paper_slug": paper_slug, "source_path": str(path), "metadata": paper, "tags": payload.get("tags", []), "translate": bool(payload.get("translate")), "options": payload.get("options", {}), "reuse_from": str(reusable) if reusable else "", "auto_codex": auto_codex, "codex_workflow": {"enabled": auto_codex, "prompt": codex_prompt}, "status": "queued", "progress": 0, "message": "等待处理" if not reusable else "等待复用已有结果", "created_at": time.strftime("%H:%M:%S")}
+        task = {"id": uuid.uuid4().hex, "project_slug": name, "project_type": project_type, "paper_slug": paper_slug, "source_path": str(path), "metadata": paper, "tags": payload.get("tags", []), "translate": bool(payload.get("translate")), "options": payload.get("options", {}), "reuse_from": str(reusable) if reusable else "", "auto_codex": auto_codex, "codex_workflow": {"enabled": auto_codex, "prompt": codex_prompt}, "status": "queued", "progress": 0, "message": "等待处理" if not reusable else "等待复用已有结果", "created_at": timestamp_now()}
         TASKS.add(task)
     if project_type == "collection":
         (project_dir / "manifest.json").write_text(json.dumps(root_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1655,6 +1732,11 @@ class Handler(BaseHTTPRequestHandler):
                 output_path = project_output_path(payload.get("project", ""), payload.get("path", ""))
                 subprocess.Popen(["open", str(output_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 self.send_json({"ok": True, "path": str(output_path)})
+            elif parsed.path == "/api/open-translation":
+                payload = self.read_json()
+                translation_path = project_translation_path(payload.get("project", ""), payload.get("path", ""))
+                subprocess.Popen(["open", str(translation_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.send_json({"ok": True, "path": str(translation_path)})
             else:
                 self.send_json({"error": "Not found"}, 404)
         except (ValueError, OSError, json.JSONDecodeError) as exc:

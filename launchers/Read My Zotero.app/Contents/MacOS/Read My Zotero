@@ -1,0 +1,115 @@
+#!/bin/zsh
+set -u
+
+PROJECT_DIR="${READ_MY_ZOTERO_PROJECT_DIR:-/Users/avalanche/FDU/projects/tools/read-my-zotero}"
+PORT="${READ_MY_ZOTERO_PORT:-8765}"
+URL="http://127.0.0.1:${PORT}"
+FRONTEND_PORT="${READ_MY_ZOTERO_FRONTEND_PORT:-3000}"
+FRONTEND_URL="http://127.0.0.1:${FRONTEND_PORT}"
+LOG_DIR="${PROJECT_DIR}/read-my-zotero-workspaces/.runtime"
+LOG_FILE="${LOG_DIR}/server.log"
+PID_DIR="${LOG_DIR}/pids"
+PYTHON_BIN="${READ_MY_ZOTERO_PYTHON:-}"
+if [[ -z "${PYTHON_BIN}" ]]; then
+  for CANDIDATE in \
+    "${PROJECT_DIR}/.venv/bin/python3" \
+    "/opt/homebrew/bin/python3" \
+    "/usr/local/bin/python3" \
+    "/Users/avalanche/miniconda3/bin/python3" \
+    "/usr/bin/python3"; do
+    if [[ -x "${CANDIDATE}" ]]; then
+      PYTHON_BIN="${CANDIDATE}"
+      break
+    fi
+  done
+fi
+NPM_BIN="${READ_MY_ZOTERO_NPM:-}"
+if [[ -z "${NPM_BIN}" ]]; then
+  for CANDIDATE in \
+    "/opt/homebrew/bin/npm" \
+    "/usr/local/bin/npm" \
+    "/Users/avalanche/.local/share/fnm/node-versions/v24.14.0/installation/bin/npm" \
+    "/Users/avalanche/.nvm/versions/node/current/bin/npm"; do
+    if [[ -x "${CANDIDATE}" ]]; then
+      NPM_BIN="${CANDIDATE}"
+      break
+    fi
+  done
+fi
+
+if [[ ! -d "${PROJECT_DIR}" ]]; then
+  print -u2 "Read My Zotero: project directory does not exist: ${PROJECT_DIR}"
+  exit 1
+fi
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  print -u2 "Read My Zotero: Python 3 was not found. Set READ_MY_ZOTERO_PYTHON to its absolute path."
+  exit 1
+fi
+if [[ ! -x "${NPM_BIN}" ]]; then
+  print -u2 "Read My Zotero: npm was not found. Install Node.js or set READ_MY_ZOTERO_NPM to its absolute path."
+  exit 1
+fi
+
+# Finder and Spotlight start apps with a minimal PATH. npm itself may be
+# available by absolute path while its scripts still need to resolve node.
+NPM_DIR="$(/usr/bin/dirname "${NPM_BIN}")"
+export PATH="${NPM_DIR}:${PATH:-/usr/bin:/bin}"
+
+cd "${PROJECT_DIR}"
+if [[ ! -d "${PROJECT_DIR}/node_modules" ]]; then
+  print "Read My Zotero: installing frontend dependencies..."
+  "${NPM_BIN}" ci || exit 1
+fi
+if [[ ! -f "${PROJECT_DIR}/.next/BUILD_ID" ]]; then
+  print "Read My Zotero: building the frontend..."
+  "${NPM_BIN}" run build || exit 1
+fi
+
+mkdir -p "${LOG_DIR}" "${PID_DIR}"
+
+# Always recycle the processes owned by this launcher. `next start` loads a
+# production build only once, so keeping an old listener alive makes a newly
+# built UI appear unchanged after source edits.
+OLD_PID="$(/usr/sbin/lsof -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null || true)"
+if [[ -n "${OLD_PID}" ]]; then
+  /bin/kill ${OLD_PID} 2>/dev/null || true
+  /bin/sleep 0.3
+fi
+/usr/bin/nohup /usr/bin/env READ_MY_ZOTERO_FRONTEND_PORT="${FRONTEND_PORT}" "${PYTHON_BIN}" "${PROJECT_DIR}/app.py" >>"${LOG_FILE}" 2>&1 < /dev/null &!
+SERVER_PID=$!
+print -r -- "${SERVER_PID}" > "${PID_DIR}/backend.launcher.pid"
+for _ in {1..30}; do
+  if /usr/bin/curl --silent --fail --max-time 1 "${URL}/api/config" >/dev/null 2>&1; then
+    break
+  fi
+  /bin/sleep 0.2
+done
+BACKEND_PID="$(/usr/sbin/lsof -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | head -1 || true)"
+if [[ -n "${BACKEND_PID}" ]]; then
+  print -r -- "${BACKEND_PID}" > "${PID_DIR}/backend.pid"
+fi
+
+FRONTEND_PID="$(/usr/sbin/lsof -tiTCP:"${FRONTEND_PORT}" -sTCP:LISTEN 2>/dev/null || true)"
+if [[ -n "${FRONTEND_PID}" ]]; then
+  /bin/kill ${FRONTEND_PID} 2>/dev/null || true
+  /bin/sleep 0.3
+fi
+if [[ -x "${NPM_BIN}" ]]; then
+  /usr/bin/nohup /usr/bin/env READ_MY_ZOTERO_BACKEND="${URL}" "${NPM_BIN}" run start -- -p "${FRONTEND_PORT}" >>"${LOG_FILE}" 2>&1 < /dev/null &!
+else
+  /usr/bin/nohup /usr/bin/env READ_MY_ZOTERO_BACKEND="${URL}" npm run start -- -p "${FRONTEND_PORT}" >>"${LOG_FILE}" 2>&1 < /dev/null &!
+fi
+FRONTEND_LAUNCHER_PID=$!
+print -r -- "${FRONTEND_LAUNCHER_PID}" > "${PID_DIR}/frontend.launcher.pid"
+for _ in {1..30}; do
+  if /usr/bin/curl --silent --fail --max-time 1 "${FRONTEND_URL}/" | /usr/bin/grep -q "Read My Zotero"; then
+    break
+  fi
+  /bin/sleep 0.2
+done
+FRONTEND_PID="$(/usr/sbin/lsof -tiTCP:"${FRONTEND_PORT}" -sTCP:LISTEN 2>/dev/null | head -1 || true)"
+if [[ -n "${FRONTEND_PID}" ]]; then
+  print -r -- "${FRONTEND_PID}" > "${PID_DIR}/frontend.pid"
+fi
+
+/usr/bin/open "${FRONTEND_URL}"

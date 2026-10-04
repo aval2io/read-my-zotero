@@ -1,0 +1,51 @@
+#!/bin/zsh
+set -u
+
+PROJECT_DIR="${READ_MY_ZOTERO_PROJECT_DIR:-/Users/avalanche/FDU/projects/tools/read-my-zotero}"
+PORT="${READ_MY_ZOTERO_PORT:-8765}"
+FRONTEND_PORT="${READ_MY_ZOTERO_FRONTEND_PORT:-3000}"
+PID_DIR="${PROJECT_DIR}/read-my-zotero-workspaces/.runtime/pids"
+
+is_running() {
+  [[ -n "$1" ]] && /bin/kill -0 "$1" 2>/dev/null
+}
+
+stop_pid_file() {
+  local file="$1"
+  local expected="$2"
+  [[ -f "${file}" ]] || return 0
+  local pid="$(/bin/cat "${file}" 2>/dev/null || true)"
+  if is_running "${pid}"; then
+    local command="$(/bin/ps -p "${pid}" -o command= 2>/dev/null || true)"
+    if [[ "${command}" == *"${expected}"* ]]; then
+      /bin/kill "${pid}" 2>/dev/null || true
+    fi
+  fi
+  /bin/rm -f "${file}"
+}
+
+# Prefer recorded PIDs and verify their command before terminating anything.
+stop_pid_file "${PID_DIR}/frontend.pid" "next"
+stop_pid_file "${PID_DIR}/frontend.launcher.pid" "npm"
+stop_pid_file "${PID_DIR}/backend.pid" "app.py"
+stop_pid_file "${PID_DIR}/backend.launcher.pid" "app.py"
+
+# A server may have been started manually before PID tracking was installed.
+# Only stop listeners whose command identifies this project.
+for port in "${FRONTEND_PORT}" "${PORT}"; do
+  for pid in $(/usr/sbin/lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null); do
+    command="$(/bin/ps -p "${pid}" -o command= 2>/dev/null || true)"
+    if [[ "${command}" == *"read-my-zotero"* || "${command}" == *"app.py"* ]]; then
+      /bin/kill "${pid}" 2>/dev/null || true
+    fi
+  done
+done
+
+for _ in {1..20}; do
+  if ! /usr/sbin/lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1 && ! /usr/sbin/lsof -nP -iTCP:"${FRONTEND_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+    exit 0
+  fi
+  /bin/sleep 0.1
+done
+
+exit 0

@@ -1,0 +1,129 @@
+/read-my-zotero-workspaces
+
+# ==========================================
+# Operating System & IDE Files (VS Code)
+# ==========================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# VS Code settings and local environment
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# JetBrains / Cursor / Other Editors
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# ==========================================
+# Environment Variables & Secrets
+# ==========================================
+.env
+.env*.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+!.env.example
+
+# ==========================================
+# Next.js & Node.js Frontend Dependencies
+# ==========================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Next.js Build & Cache Outputs
+.next/
+out/
+build/
+dist/
+
+# Vercel deployment metadata
+.vercel/
+
+# Testing & Coverage (JavaScript / TypeScript)
+coverage/
+cypress/videos/
+cypress/screenshots/
+.nyc_output/
+.playwright/
+
+# TypeScript declaration caches
+*.tsbuildinfo
+next-env.d.ts
+
+# Package manager lockfile variations (Uncomment if you enforce ONE package manager)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# ==========================================
+# Python & FastAPI Backend
+# ==========================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+.venv/
+env/
+.env/
+ENV/
+env.bak/
+venv.bak/
+
+# FastAPI / Uvicorn Server Logs & Databases
+*.log
+*.sqlite3
+*.db
+*.sqlite
+
+# Python Package & Build Files
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Testing & Type Checking (Pytest, Mypy, Ruff)
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints/
+
+# Celery / Redis temporary files
+celerybeat-schedule
+celerybeat.pid
+
+# ==========================================
+# Miscellaneous & Temporary Files
+# ==========================================
+*.bak
+*.tmp
+*.temp
+*.log
+.cache/

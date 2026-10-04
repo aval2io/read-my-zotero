@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Read My Zotero</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">R</span><div><strong>Read My Zotero</strong><small>research workspace</small></div></div>
+      <nav><button class="nav-item active" data-view="projects"><span>▦</span>项目</button><button class="nav-item" data-view="zotero"><span>⌘</span>Zotero 库</button><button class="nav-item" data-view="create"><span>＋</span>创建项目</button><button class="nav-item" data-view="tasks"><span>◷</span>任务队列 <b id="task-badge">0</b></button></nav><section class="folder-sidebar"><div class="folder-sidebar-head"><span>工作区目录</span><button id="new-folder" class="folder-add" title="新建顶层文件夹">＋</button></div><div id="folder-tree"></div></section>
+      <div class="sidebar-footer"><button class="settings-button" id="settings-button">⚙ 设置</button><span class="connection-dot"></span><span>本地服务</span></div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><div><p class="eyebrow" id="eyebrow">WORKSPACES</p><h1 id="page-title">项目</h1></div><div class="top-actions"><button class="ghost-button" id="refresh-button">↻ 刷新</button><button class="primary-button" id="new-project-button">＋ 新建项目</button></div></header>
+      <section id="projects-view" class="view"></section>
+      <section id="zotero-view" class="view hidden"></section>
+      <section id="create-view" class="view hidden"></section>
+      <section id="tasks-view" class="view hidden"></section>
+    </main>
+  </div>
+  <div id="toast" class="toast"></div>
+  <div id="settings-modal" class="modal hidden"><div class="modal-backdrop"></div><div class="modal-card"><div class="modal-head"><div><p class="eyebrow">SETTINGS</p><h2>本地配置</h2></div><button id="close-settings" class="icon-button">×</button></div><div class="field"><label>Zotero 数据目录</label><input id="settings-zotero" /></div><div class="field"><label>工作区目录</label><input id="settings-workspaces" /></div><div class="field"><label>PDF 提取最大并发数</label><input id="settings-concurrency" type="number" min="1" max="8" /></div><div class="field"><label>Codex 最大并发数</label><input id="settings-codex-concurrency" type="number" min="1" max="8" /></div><div class="modal-actions"><button class="ghost-button" id="cancel-settings">取消</button><button class="primary-button" id="save-settings">保存设置</button></div></div></div>
+  <div id="project-modal" class="modal hidden"><div class="modal-backdrop"></div><div class="modal-card project-detail-card"><div class="modal-head"><div><p class="eyebrow">PROJECT DETAILS</p><h2 id="detail-project-title">项目元数据</h2></div><button id="close-project" class="icon-button">×</button></div><div id="project-detail-content"></div></div></div>
+  <div id="folder-copy-modal" class="modal hidden"><div class="modal-backdrop"></div><div class="modal-card folder-copy-card"><div class="modal-head"><div><p class="eyebrow">COPY TO FOLDERS</p><h2>复制到其他文件夹</h2></div><button id="close-folder-copy" class="icon-button">×</button></div><p class="muted" id="folder-copy-description">选择目标文件夹，原有归类会保留。</p><div id="folder-copy-list" class="folder-copy-list"></div><div class="modal-actions"><button class="ghost-button" id="cancel-folder-copy">取消</button><button class="primary-button" id="save-folder-copy">复制到选中文件夹</button></div></div></div>
+  <div id="rename-modal" class="modal hidden"><div class="modal-backdrop"></div><div class="modal-card rename-card"><div class="modal-head"><div><p class="eyebrow">RENAME PROJECT</p><h2>修改项目名</h2></div><button id="close-rename" class="icon-button">×</button></div><div class="field"><label>项目名称</label><input id="rename-input" /></div><div class="modal-actions"><button class="ghost-button" id="cancel-rename">取消</button><button class="primary-button" id="save-rename">保存</button></div></div></div>
+  <div id="codex-modal" class="modal hidden"><div class="modal-backdrop"></div><div class="modal-card codex-card"><div class="modal-head"><div><p class="eyebrow">CODEX EXEC</p><h2 id="codex-title">调用 Codex</h2></div><button id="close-codex" class="icon-button">×</button></div><div class="field"><label>提示词</label><textarea id="codex-prompt" rows="6" placeholder="例如：阅读项目中的所有文章，生成一份中文综述并保存到 outputs/literature-review.md"></textarea></div><div class="codex-status" id="codex-status"></div><pre class="codex-log" id="codex-log"></pre><div class="field hidden" id="codex-command-field"><label>终端继续指令</label><div class="path-row"><input class="path-input" id="codex-command" readonly /><button class="small-button" id="copy-codex-command">复制</button></div></div><div class="modal-actions"><button class="ghost-button" id="cancel-codex">关闭</button><button class="ghost-button hidden" id="cancel-codex-run">取消运行</button><button class="primary-button" id="start-codex">开始执行</button></div></div></div>
+  <div id="output-modal" class="modal hidden"><div class="modal-backdrop"></div><div class="modal-card output-card"><div class="modal-head"><div><p class="eyebrow">PROJECT OUTPUTS</p><h2 id="output-title">产出文件</h2></div><button id="close-output" class="icon-button">×</button></div><div id="output-list"></div><pre class="output-content hidden" id="output-content"></pre></div></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

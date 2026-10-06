@@ -1460,7 +1460,7 @@ def schedule_project_codex(project_name: str) -> None:
 
     def wait_and_start() -> None:
         try:
-            deadline = time.monotonic() + 120
+            deadline = time.monotonic() + 900
             while time.monotonic() < deadline:
                 if maybe_start_project_codex(name):
                     return
@@ -1474,6 +1474,20 @@ def schedule_project_codex(project_name: str) -> None:
                 AUTO_CODEX_PENDING.discard(name)
 
     threading.Thread(target=wait_and_start, name=f"auto-codex-{name}", daemon=True).start()
+
+
+def schedule_projects_codex(project_names: list[str]) -> list[str]:
+    """Schedule automatic Codex checks for a completed batch of projects."""
+    scheduled = []
+    for project_name in dict.fromkeys(str(name or "").strip() for name in project_names):
+        if not project_name:
+            continue
+        project_dir = WORKSPACES / slug(project_name)
+        manifest = project_manifest(project_dir)
+        if manifest and (manifest.get("codex_workflow") or {}).get("enabled"):
+            schedule_project_codex(project_name)
+            scheduled.append(slug(project_name))
+    return scheduled
 
 
 def create_project(payload: dict) -> dict:
@@ -1913,6 +1927,12 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/codex/run":
                 payload = self.read_json()
                 self.send_json(CODEX_RUNS.add(payload.get("project", ""), payload.get("prompt", "")), 202)
+            elif parsed.path == "/api/codex/auto":
+                payload = self.read_json()
+                project_names = payload.get("projects") or []
+                if not isinstance(project_names, list):
+                    raise ValueError("projects 必须是数组")
+                self.send_json({"projects": schedule_projects_codex(project_names)}, 202)
             elif parsed.path == "/api/codex/cancel":
                 self.send_json(CODEX_RUNS.cancel(self.read_json().get("id", "")))
             elif parsed.path == "/api/rename":

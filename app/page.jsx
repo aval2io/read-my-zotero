@@ -190,7 +190,14 @@ function ZoteroTree({ collections, selected, onSelect }) {
   );
 }
 
-function WorkspaceTree({ folders, counts, selected, onSelect, onDelete }) {
+function WorkspaceTree({
+  folders,
+  counts,
+  selected,
+  onSelect,
+  onDelete,
+  onBatchCodex,
+}) {
   const [expanded, setExpanded] = useState(new Set());
   const childrenByParent = useMemo(
     () =>
@@ -238,6 +245,7 @@ function WorkspaceTree({ folders, counts, selected, onSelect, onDelete }) {
           depth={0}
           counts={counts}
           onDelete={onDelete}
+          onBatchCodex={onBatchCodex}
         />
       ))}
     </div>
@@ -254,6 +262,7 @@ function WorkspaceNode({
   depth,
   counts,
   onDelete,
+  onBatchCodex,
 }) {
   const children = childrenByParent[item.id] || [];
   const open = expanded.has(item.id);
@@ -282,6 +291,17 @@ function WorkspaceNode({
           <span>{item.name}</span>
         </button>
         <b>{counts.byFolder?.[item.id] || 0}</b>
+        <button
+          className="workspace-codex"
+          title={`批量执行 Codex：${item.name}`}
+          aria-label={`批量执行 Codex：${item.name}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onBatchCodex?.(item);
+          }}
+        >
+          <Zap size={13} />
+        </button>
         <button
           className="workspace-delete"
           title={`删除目录 ${item.name}`}
@@ -313,6 +333,7 @@ function WorkspaceNode({
                 depth={depth + 1}
                 counts={counts}
                 onDelete={onDelete}
+                onBatchCodex={onBatchCodex}
               />
             ))}
           </div>
@@ -439,7 +460,9 @@ function ProjectsView({
   const [nameMode, setNameMode] = useState("citation");
   useEffect(() => {
     try {
-      const saved = window.localStorage.getItem("read-my-zotero-project-name-mode");
+      const saved = window.localStorage.getItem(
+        "read-my-zotero-project-name-mode",
+      );
       if (saved === "title" || saved === "citation") setNameMode(saved);
     } catch {
       // localStorage can be unavailable in private browsing contexts.
@@ -548,7 +571,10 @@ function ProjectsView({
           />
         </div>
         <div className="project-toolbar-actions">
-          <label className="name-mode-toggle" title="切换项目列表中的名称显示方式">
+          <label
+            className="name-mode-toggle"
+            title="切换项目列表中的名称显示方式"
+          >
             <input
               type="checkbox"
               checked={nameMode === "title"}
@@ -1558,7 +1584,10 @@ function AddCollectionPapersDialog({ projectName, onClose, onAdded }) {
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       try {
-        const data = await api(`/api/search?q=${encodeURIComponent(query.trim())}`, { signal: controller.signal });
+        const data = await api(
+          `/api/search?q=${encodeURIComponent(query.trim())}`,
+          { signal: controller.signal },
+        );
         if (!controller.signal.aborted) setResults(data.items || []);
       } catch (cause) {
         if (!controller.signal.aborted) setError(cause.message);
@@ -1569,18 +1598,24 @@ function AddCollectionPapersDialog({ projectName, onClose, onAdded }) {
       controller.abort();
     };
   }, [query]);
-  const toggle = (item) => setSelected((previous) => {
-    const next = new Map(previous);
-    next.has(item.zotero_item_key) ? next.delete(item.zotero_item_key) : next.set(item.zotero_item_key, item);
-    return next;
-  });
+  const toggle = (item) =>
+    setSelected((previous) => {
+      const next = new Map(previous);
+      next.has(item.zotero_item_key)
+        ? next.delete(item.zotero_item_key)
+        : next.set(item.zotero_item_key, item);
+      return next;
+    });
   const submit = async (event) => {
     event.preventDefault();
     if (!selected.size || submitting) return;
     setSubmitting(true);
     setError("");
     try {
-      const papers = [...selected.values()].map((item) => ({ ...item, path: item.pdfs[0] }));
+      const papers = [...selected.values()].map((item) => ({
+        ...item,
+        path: item.pdfs[0],
+      }));
       const result = await api("/api/project/papers", {
         method: "POST",
         body: JSON.stringify({ project: projectName, papers, translate }),
@@ -1594,31 +1629,119 @@ function AddCollectionPapersDialog({ projectName, onClose, onAdded }) {
     }
   };
   return (
-    <dialog ref={dialogRef} className="detail-dialog collection-paper-dialog" onCancel={(event) => { event.preventDefault(); if (!submitting) onClose(); }}>
+    <dialog
+      ref={dialogRef}
+      className="detail-dialog collection-paper-dialog"
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!submitting) onClose();
+      }}
+    >
       <form onSubmit={submit}>
         <header className="detail-header">
-          <div><div className="eyebrow">ADD ARTICLES</div><h2>追加文章</h2></div>
-          <button type="button" className="icon-button detail-close" onClick={onClose} disabled={submitting} aria-label="关闭"><X size={17} /></button>
+          <div>
+            <div className="eyebrow">ADD ARTICLES</div>
+            <h2>追加文章</h2>
+          </div>
+          <button
+            type="button"
+            className="icon-button detail-close"
+            onClick={onClose}
+            disabled={submitting}
+            aria-label="关闭"
+          >
+            <X size={17} />
+          </button>
         </header>
-        <p className="muted">从 Zotero 搜索带 PDF 的文章。已处理过的单篇项目会自动复用 Markdown 和图片。</p>
-        <div className="search-box collection-paper-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、作者、DOI 或 citation key" autoFocus /></div>
-        <div className="collection-paper-results">
-          {results.length ? results.map((item) => (
-            <label className={cn("item-card", !item.has_pdf && "disabled")} key={item.zotero_item_key}>
-              <input type="checkbox" disabled={!item.has_pdf || submitting} checked={selected.has(item.zotero_item_key)} onChange={() => toggle(item)} />
-              <div><strong>{item.title || "未命名条目"}</strong><div className="item-meta">{item.authors || "作者未知"} · {formatDate(item.date)}{item.citation_key && ` · ${item.citation_key}`}</div><small className={item.has_pdf ? "pdf-ready" : "pdf-missing"}>{item.has_pdf ? `${item.pdfs.length} 个 PDF 附件` : "没有可用 PDF 附件"}</small></div>
-            </label>
-          )) : <div className="empty-small">输入关键词搜索 Zotero 文章</div>}
+        <p className="muted">
+          从 Zotero 搜索带 PDF 的文章。已处理过的单篇项目会自动复用 Markdown
+          和图片。
+        </p>
+        <div className="search-box collection-paper-search">
+          <Search size={15} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="搜索标题、作者、DOI 或 citation key"
+            autoFocus
+          />
         </div>
-        <label className="check"><input type="checkbox" checked={translate} onChange={(event) => setTranslate(event.target.checked)} disabled={submitting} /> 同时生成中文翻译</label>
-        {error && <div className="error-banner folder-error" role="alert"><CircleHelp size={16} />{error}</div>}
-        <footer className="folder-footer"><button type="button" className="button ghost" onClick={onClose} disabled={submitting}>取消</button><button type="submit" className="button primary" disabled={submitting || !selected.size}>{submitting ? <LoaderCircle size={16} /> : <Plus size={16} />}{submitting ? "加入中..." : `追加 ${selected.size} 篇文章`}</button></footer>
+        <div className="collection-paper-results">
+          {results.length ? (
+            results.map((item) => (
+              <label
+                className={cn("item-card", !item.has_pdf && "disabled")}
+                key={item.zotero_item_key}
+              >
+                <input
+                  type="checkbox"
+                  disabled={!item.has_pdf || submitting}
+                  checked={selected.has(item.zotero_item_key)}
+                  onChange={() => toggle(item)}
+                />
+                <div>
+                  <strong>{item.title || "未命名条目"}</strong>
+                  <div className="item-meta">
+                    {item.authors || "作者未知"} · {formatDate(item.date)}
+                    {item.citation_key && ` · ${item.citation_key}`}
+                  </div>
+                  <small className={item.has_pdf ? "pdf-ready" : "pdf-missing"}>
+                    {item.has_pdf
+                      ? `${item.pdfs.length} 个 PDF 附件`
+                      : "没有可用 PDF 附件"}
+                  </small>
+                </div>
+              </label>
+            ))
+          ) : (
+            <div className="empty-small">输入关键词搜索 Zotero 文章</div>
+          )}
+        </div>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={translate}
+            onChange={(event) => setTranslate(event.target.checked)}
+            disabled={submitting}
+          />{" "}
+          同时生成中文翻译
+        </label>
+        {error && (
+          <div className="error-banner folder-error" role="alert">
+            <CircleHelp size={16} />
+            {error}
+          </div>
+        )}
+        <footer className="folder-footer">
+          <button
+            type="button"
+            className="button ghost"
+            onClick={onClose}
+            disabled={submitting}
+          >
+            取消
+          </button>
+          <button
+            type="submit"
+            className="button primary"
+            disabled={submitting || !selected.size}
+          >
+            {submitting ? <LoaderCircle size={16} /> : <Plus size={16} />}
+            {submitting ? "加入中..." : `追加 ${selected.size} 篇文章`}
+          </button>
+        </footer>
       </form>
     </dialog>
   );
 }
 
-function ProjectDetail({ details, onClose, onOpenZotero, onDeleteProject, onRefreshProject }) {
+function ProjectDetail({
+  details,
+  onClose,
+  onOpenZotero,
+  onDeleteProject,
+  onRefreshProject,
+}) {
   const project = details?.project || {};
   const papers = details?.papers || [];
   const projectName = project.name || project.citation_key || "";
@@ -1810,10 +1933,21 @@ function ProjectDetail({ details, onClose, onOpenZotero, onDeleteProject, onRefr
   };
 
   const deletePaper = async (paper) => {
-    if (!window.confirm(`确定从项目中删除“${paper.metadata?.title || paper.citation_key}”？`)) return;
+    if (
+      !window.confirm(
+        `确定从项目中删除“${paper.metadata?.title || paper.citation_key}”？`,
+      )
+    )
+      return;
     setBusy(`delete:${paper.citation_key}`);
     try {
-      await api("/api/project/paper/delete", { method: "POST", body: JSON.stringify({ project: projectName, citation_key: paper.citation_key }) });
+      await api("/api/project/paper/delete", {
+        method: "POST",
+        body: JSON.stringify({
+          project: projectName,
+          citation_key: paper.citation_key,
+        }),
+      });
       setNotice("文章已从项目中删除");
       await onRefreshProject?.(projectName);
     } catch (error) {
@@ -1895,7 +2029,10 @@ function ProjectDetail({ details, onClose, onOpenZotero, onDeleteProject, onRefr
             进行 Codex 会话
           </button>
           {project.project_type === "collection" && (
-            <button className="button ghost" onClick={() => setAddPapersOpen(true)}>
+            <button
+              className="button ghost"
+              onClick={() => setAddPapersOpen(true)}
+            >
               <Plus size={15} />
               追加文章
             </button>
@@ -1971,8 +2108,18 @@ function ProjectDetail({ details, onClose, onOpenZotero, onDeleteProject, onRefr
                         </button>
                       )}
                     {project.project_type === "collection" && (
-                      <button className="icon-button delete-icon-button" onClick={() => deletePaper(paper)} disabled={busy === `delete:${paper.citation_key}`} title="从项目中删除" aria-label={`删除 ${metadata.title || paper.citation_key}`}>
-                        {busy === `delete:${paper.citation_key}` ? <LoaderCircle size={13} /> : <Trash2 size={13} />}
+                      <button
+                        className="icon-button delete-icon-button"
+                        onClick={() => deletePaper(paper)}
+                        disabled={busy === `delete:${paper.citation_key}`}
+                        title="从项目中删除"
+                        aria-label={`删除 ${metadata.title || paper.citation_key}`}
+                      >
+                        {busy === `delete:${paper.citation_key}` ? (
+                          <LoaderCircle size={13} />
+                        ) : (
+                          <Trash2 size={13} />
+                        )}
                       </button>
                     )}
                   </div>
@@ -2187,7 +2334,18 @@ function ProjectDetail({ details, onClose, onOpenZotero, onDeleteProject, onRefr
           </button>
         </footer>
       </section>
-      {addPapersOpen && <AddCollectionPapersDialog projectName={projectName} onClose={() => setAddPapersOpen(false)} onAdded={async (result) => { setNotice(`已追加 ${result.task_count} 篇文章${result.skipped?.length ? `，跳过 ${result.skipped.length} 篇重复文章` : ""}`); await onRefreshProject?.(projectName); }} />}
+      {addPapersOpen && (
+        <AddCollectionPapersDialog
+          projectName={projectName}
+          onClose={() => setAddPapersOpen(false)}
+          onAdded={async (result) => {
+            setNotice(
+              `已追加 ${result.task_count} 篇文章${result.skipped?.length ? `，跳过 ${result.skipped.length} 篇重复文章` : ""}`,
+            );
+            await onRefreshProject?.(projectName);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -2428,6 +2586,204 @@ function CreateFolderDialog({ folders, onCreated, onClose }) {
   );
 }
 
+function BatchCodexDialog({ folder, projects, onClose, onSubmitted }) {
+  const dialogRef = useRef(null);
+  const [excludeOutputs, setExcludeOutputs] = useState(false);
+  const [excludeTranslations, setExcludeTranslations] = useState(false);
+  const [prompt, setPrompt] = useState(DEFAULT_CODEX_PROMPT);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const visibleProjects = projects.filter(
+    (project) =>
+      (!excludeOutputs || !(project.output_count || 0)) &&
+      (!excludeTranslations || !project.translation_exists),
+  );
+  const [selected, setSelected] = useState(
+    () =>
+      new Set(projects.map((project) => project.name || project.citation_key)),
+  );
+  const visibleNames = new Set(
+    visibleProjects.map((project) => project.name || project.citation_key),
+  );
+  useEffect(() => {
+    setSelected((previous) => {
+      const next = new Set([...previous].filter((name) => visibleNames.has(name)));
+      return next.size === previous.size ? previous : next;
+    });
+  }, [excludeOutputs, excludeTranslations, projects]);
+  useEffect(() => {
+    dialogRef.current?.showModal();
+    return () => dialogRef.current?.close();
+  }, []);
+  const toggle = (name) =>
+    setSelected((previous) => {
+      const next = new Set(previous);
+      next.has(name) ? next.delete(name) : next.add(name);
+      return next;
+    });
+  const submit = async (event) => {
+    event.preventDefault();
+    const selectedVisible = [...selected].filter((name) => visibleNames.has(name));
+    if (!selectedVisible.length || submitting) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      const runs = await Promise.all(
+        selectedVisible
+          .map((project) =>
+            api("/api/codex/run", {
+              method: "POST",
+              body: JSON.stringify({
+                project,
+                prompt: prompt.trim() || DEFAULT_CODEX_PROMPT,
+              }),
+            }),
+          ),
+      );
+      await onSubmitted(runs.length);
+      onClose();
+    } catch (cause) {
+      setError(cause.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+  return (
+    <dialog
+      ref={dialogRef}
+      className="detail-dialog batch-codex-dialog"
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!submitting) onClose();
+      }}
+    >
+      <form onSubmit={submit}>
+        <header className="detail-header">
+          <div>
+            <div className="eyebrow">BATCH CODEX</div>
+            <h2>{folder.name}</h2>
+          </div>
+          <button
+            type="button"
+            className="icon-button detail-close"
+            onClick={onClose}
+            disabled={submitting}
+            aria-label="关闭"
+          >
+            <X size={17} />
+          </button>
+        </header>
+        <p className="muted">
+          选择此目录及子目录中的项目，逐个加入 Codex 队列。
+        </p>
+        <div className="batch-codex-toolbar">
+          <button
+            type="button"
+            className="small-button"
+            onClick={() =>
+              setSelected(
+                new Set(
+                  visibleProjects.map(
+                    (project) => project.name || project.citation_key,
+                  ),
+                ),
+              )
+            }
+          >
+            全选
+          </button>
+          <button
+            type="button"
+            className="small-button"
+            onClick={() => setSelected(new Set())}
+          >
+            清空
+          </button>
+          <span className="muted">
+            已选 {selected.size} / {visibleProjects.length}
+          </span>
+        </div>
+        <div className="batch-codex-options">
+          <label>
+            <input
+              type="checkbox"
+              checked={excludeOutputs}
+              onChange={(event) => setExcludeOutputs(event.target.checked)}
+              disabled={submitting}
+            />{" "}
+            排除已有 outputs 产出的项目
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={excludeTranslations}
+              onChange={(event) => setExcludeTranslations(event.target.checked)}
+              disabled={submitting}
+            />{" "}
+            排除已有中文翻译的项目
+          </label>
+        </div>
+        <div className="batch-codex-projects">
+          {visibleProjects.length ? (
+            visibleProjects.map((project) => {
+              const name = project.name || project.citation_key;
+              return (
+                <label className="batch-codex-project" key={name}>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(name)}
+                    onChange={() => toggle(name)}
+                    disabled={submitting}
+                  />
+                  <span>{name}</span>
+                  <small>
+                    {project.title || project.metadata?.title || ""}
+                  </small>
+                </label>
+              );
+            })
+          ) : (
+            <div className="empty-small">当前筛选条件下没有可执行项目</div>
+          )}
+        </div>
+        <label className="codex-prompt-field">
+          <span>Codex 提示词</span>
+          <textarea
+            rows="5"
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            disabled={submitting}
+          />
+        </label>
+        {error && (
+          <div className="error-banner folder-error" role="alert">
+            <CircleHelp size={16} />
+            {error}
+          </div>
+        )}
+        <footer className="folder-footer">
+          <button
+            type="button"
+            className="button ghost"
+            onClick={onClose}
+            disabled={submitting}
+          >
+            取消
+          </button>
+          <button
+            type="submit"
+            className="button primary"
+            disabled={submitting || !selected.size}
+          >
+            {submitting ? <LoaderCircle size={16} /> : <Zap size={16} />}
+            {submitting ? "加入中..." : `执行 ${selected.size} 个项目`}
+          </button>
+        </footer>
+      </form>
+    </dialog>
+  );
+}
+
 export default function Page() {
   const [view, setView] = useState("projects");
   const [projects, setProjects] = useState([]);
@@ -2447,6 +2803,7 @@ export default function Page() {
   const [importResult, setImportResult] = useState("");
   const [folderDialogOpen, setFolderDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState("");
+  const [batchCodexFolder, setBatchCodexFolder] = useState(null);
   const loadWorkspace = useCallback(async () => {
     const [projectData, folderResponse] = await Promise.all([
       api("/api/projects"),
@@ -2538,6 +2895,7 @@ export default function Page() {
         codex_prompt: prompt,
       };
       if (mode === "single") {
+        const autoCodexProjects = [];
         const uniquePapers = [
           ...new Map(
             papers.map((paper) => [
@@ -2557,9 +2915,18 @@ export default function Page() {
             }),
           });
           counts[result.outcome || "created"] += 1;
+          if (autoCodex && result.name && result.outcome === "created") {
+            autoCodexProjects.push(result.name);
+          }
           setImportResult(
             `新建 ${counts.created} 篇 · 加入目录 ${counts.linked} 篇 · 已有跳过 ${counts.skipped} 篇`,
           );
+        }
+        if (autoCodexProjects.length) {
+          await api("/api/codex/auto", {
+            method: "POST",
+            body: JSON.stringify({ projects: autoCodexProjects }),
+          });
         }
       } else
         await api("/api/projects", {
@@ -2620,7 +2987,12 @@ export default function Page() {
     setDeleteTarget(name);
   };
   const deleteFolder = async (folder) => {
-    if (!window.confirm(`删除目录“${folder.name}”？其中的子目录和文章会移到未分类。`)) return;
+    if (
+      !window.confirm(
+        `删除目录“${folder.name}”？其中的子目录和文章会移到未分类。`,
+      )
+    )
+      return;
     try {
       setError("");
       const result = await api("/api/folders", {
@@ -2633,6 +3005,23 @@ export default function Page() {
       setError(cause.message);
     }
   };
+  const batchCodexProjects = useMemo(() => {
+    if (!batchCodexFolder) return [];
+    const ids = new Set([batchCodexFolder.id]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const item of folders) {
+        if (item.parent_id && ids.has(item.parent_id) && !ids.has(item.id)) {
+          ids.add(item.id);
+          changed = true;
+        }
+      }
+    }
+    return projects.filter((project) =>
+      (project.folder_ids || []).some((id) => ids.has(id)),
+    );
+  }, [batchCodexFolder, folders, projects]);
   const workspaceSidebar = (
     <section className="sidebar-block">
       <div className="sidebar-block-head">
@@ -2659,6 +3048,7 @@ export default function Page() {
           setView("projects");
         }}
         onDelete={deleteFolder}
+        onBatchCodex={setBatchCodexFolder}
       />
     </section>
   );
@@ -2771,6 +3161,17 @@ export default function Page() {
           folders={folders}
           onCreated={loadWorkspace}
           onClose={() => setFolderDialogOpen(false)}
+        />
+      )}
+      {batchCodexFolder && (
+        <BatchCodexDialog
+          folder={batchCodexFolder}
+          projects={batchCodexProjects}
+          onClose={() => setBatchCodexFolder(null)}
+          onSubmitted={async (count) => {
+            setImportResult(`已将 ${count} 个项目加入 Codex 队列`);
+            await loadTasks();
+          }}
         />
       )}
     </AppShell>

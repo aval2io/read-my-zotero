@@ -1022,9 +1022,10 @@ class TaskManager:
             (paper_dir / "translation.md").write_text(f"# {title}\n\nTranslation will be generated after OCR completes.\n", encoding="utf-8")
         self._update(task["id"], progress=100, status="completed", message="项目已就绪", project_path=str(project_dir))
         if task["project_type"] == "collection":
-            root_manifest = project_manifest(project_dir) or {}
-            root_manifest["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-            (project_dir / "manifest.json").write_text(json.dumps(root_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+            with PROJECT_CREATE_LOCK:
+                root_manifest = project_manifest(project_dir) or {}
+                root_manifest["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+                (project_dir / "manifest.json").write_text(json.dumps(root_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 TASKS = TaskManager()
@@ -1603,6 +1604,131 @@ def _create_project(payload: dict) -> dict:
     return {"name": name, "path": str(project_dir), "task_count": len(papers), "outcome": "created"}
 
 
+def _paper_identity(paper: dict) -> tuple[str, str, str]:
+    """Return stable identity fields used when merging papers into a collection."""
+    return (
+        str(paper.get("zotero_item_key") or "").strip(),
+        slug(paper.get("citation_key") or ""),
+        str(Path(paper.get("path", "")).expanduser().resolve()) if paper.get("path") else "",
+    )
+
+
+def add_collection_papers(project_name: str, payload: dict) -> dict:
+    """Append papers to an existing collection project and enqueue extraction tasks."""
+    with PROJECT_CREATE_LOCK:
+        return _add_collection_papers(project_name, payload)
+
+
+def _add_collection_papers(project_name: str, payload: dict) -> dict:
+    """Implementation for add_collection_papers, called while creation is locked."""
+    name = slug(project_name)
+    project_dir = safe_project_dir(name)
+    root_manifest = project_manifest(project_dir)
+    if not root_manifest or root_manifest.get("project_type") != "collection":
+        raise ValueError("只有多文章项目可以追加文章")
+    papers = payload.get("papers") or []
+    if not isinstance(papers, list) or not papers:
+        raise ValueError("至少选择一篇文章")
+    for paper in papers:
+        if not isinstance(paper, dict):
+            raise ValueError("文章数据格式无效")
+        path = Path(paper.get("path", "")).expanduser()
+        if not path.is_file() or path.suffix.lower() != ".pdf":
+            raise ValueError(f"PDF 不存在：{path}")
+
+    existing = root_manifest.get("papers", [])
+    existing_ids = {_paper_identity(item.get("metadata") or item) for item in existing}
+    existing_slugs = {slug(item.get("citation_key") or "") for item in existing}
+    added: list[dict] = []
+    skipped: list[str] = []
+    auto_codex = bool(payload.get("auto_codex", (root_manifest.get("codex_workflow") or {}).get("enabled")))
+    codex_prompt = normalize_codex_prompt(payload.get("codex_prompt", (root_manifest.get("codex_workflow") or {}).get("prompt")))
+    tags = payload.get("tags", root_manifest.get("tags", []))
+    translate = bool(payload.get("translate"))
+    for paper in papers:
+        paper_slug = slug(paper.get("citation_key") or Path(paper["path"]).stem)
+        identity = _paper_identity(paper)
+        if identity in existing_ids or paper_slug in existing_slugs:
+            skipped.append(paper_slug)
+            continue
+        # Keep directory names unique even for legacy records with duplicate citation keys.
+        base_slug = paper_slug
+        counter = 2
+        while paper_slug in existing_slugs or (project_dir / "papers" / paper_slug).exists():
+            paper_slug = f"{base_slug}-{counter}"
+            counter += 1
+        path = Path(paper["path"]).expanduser()
+        item = {
+            "citation_key": paper_slug,
+            "title": paper.get("title") or path.stem,
+            "metadata": paper,
+            "source": {"path": str(path), "zotero_item_key": paper.get("zotero_item_key")},
+            "created_at": timestamp_now(),
+        }
+        existing.append(item)
+        existing_ids.add(identity)
+        existing_slugs.add(paper_slug)
+        reusable = find_reusable_artifacts(path, paper_slug)
+        task = {
+            "id": uuid.uuid4().hex,
+            "project_slug": name,
+            "project_type": "collection",
+            "paper_slug": paper_slug,
+            "source_path": str(path),
+            "metadata": paper,
+            "tags": tags,
+            "translate": translate,
+            "options": payload.get("options", {}),
+            "reuse_from": str(reusable) if reusable else "",
+            "auto_codex": auto_codex,
+            "codex_workflow": {"enabled": auto_codex, "prompt": codex_prompt},
+            "status": "queued",
+            "progress": 0,
+            "message": "等待处理" if not reusable else "等待复用已有结果",
+            "created_at": timestamp_now(),
+        }
+        TASKS.add(task)
+        added.append({"citation_key": paper_slug, "reused": bool(reusable)})
+    root_manifest["papers"] = existing
+    root_manifest["tags"] = tags
+    root_manifest["codex_workflow"] = {"enabled": auto_codex, "prompt": codex_prompt}
+    root_manifest["updated_at"] = timestamp_now()
+    (project_dir / "manifest.json").write_text(json.dumps(root_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    if added and auto_codex:
+        schedule_project_codex(name)
+    return {"name": name, "added": added, "skipped": skipped, "task_count": len(added), "outcome": "updated"}
+
+
+def delete_collection_paper(project_name: str, citation_key: str) -> dict:
+    """Remove one paper directory and its manifest entry from a collection."""
+    name = slug(project_name)
+    project_dir = safe_project_dir(name)
+    root_manifest = project_manifest(project_dir)
+    if not root_manifest or root_manifest.get("project_type") != "collection":
+        raise ValueError("只有多文章项目可以删除单独文章")
+    paper_slug = slug(citation_key)
+    papers = root_manifest.get("papers", [])
+    target = next((item for item in papers if slug(item.get("citation_key") or "") == paper_slug), None)
+    if not target:
+        raise ValueError(f"找不到文章：{paper_slug}")
+    with TASKS.lock:
+        active = [task.get("status") for task in TASKS.tasks.values()
+                  if task.get("project_slug") == name and task.get("paper_slug") == paper_slug
+                  and task.get("status") in {"queued", "running", "cancelling"}]
+    if active:
+        raise ValueError("文章仍在处理中，请等待任务完成后再删除")
+    paper_dir = project_dir / "papers" / paper_slug
+    if paper_dir.exists():
+        shutil.rmtree(paper_dir)
+    root_manifest["papers"] = [item for item in papers if item is not target]
+    root_manifest["updated_at"] = timestamp_now()
+    (project_dir / "manifest.json").write_text(json.dumps(root_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    with TASKS.lock:
+        TASKS.tasks = {task_id: task for task_id, task in TASKS.tasks.items()
+                       if not (task.get("project_slug") == name and task.get("paper_slug") == paper_slug)}
+    return {"name": name, "citation_key": paper_slug, "article_count": len(root_manifest["papers"])}
+
+
 def enqueue_retry(project_name: str) -> dict:
     name = slug(project_name)
     project_dir = WORKSPACES / name
@@ -1771,6 +1897,13 @@ class Handler(BaseHTTPRequestHandler):
                 state = str(payload.get("state") or ("todo" if payload.get("enabled") else "read"))
                 result = set_project_todo(project_name, state)
                 self.send_json({"project": project_name, "state": result})
+            elif parsed.path == "/api/project/papers":
+                payload = self.read_json()
+                project_name = payload.get("project", "")
+                self.send_json(add_collection_papers(project_name, payload), 202)
+            elif parsed.path == "/api/project/paper/delete":
+                payload = self.read_json()
+                self.send_json(delete_collection_paper(payload.get("project", ""), payload.get("citation_key", "")))
             elif parsed.path == "/api/retry":
                 self.send_json(enqueue_retry(self.read_json().get("name", "")), 202)
             elif parsed.path == "/api/codex/run":

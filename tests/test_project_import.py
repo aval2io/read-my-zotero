@@ -139,6 +139,53 @@ class ProjectImportTests(unittest.TestCase):
                 app.delete_project("in-progress")
         self.assertTrue(directory.exists())
 
+    def collection(self, name="bundle", papers=None):
+        directory = self.workspace / name
+        (directory / "papers").mkdir(parents=True)
+        manifest = {
+            "schema_version": 1,
+            "project_type": "collection",
+            "name": name,
+            "papers": papers or [],
+            "tags": [],
+            "codex_workflow": {"enabled": False, "prompt": ""},
+        }
+        (directory / "manifest.json").write_text(json.dumps(manifest))
+        return directory
+
+    def test_append_collection_reuses_existing_single_project_artifacts(self):
+        reusable = self.existing(name="single-source", key="ITEM2", folders=[])
+        paper = {**self.paper, "zotero_item_key": "ITEM2", "citation_key": "article-2"}
+        directory = self.collection()
+        task_manager = SimpleNamespace(lock=threading.Lock(), tasks={})
+        task_manager.add = lambda task: task_manager.tasks.__setitem__(task["id"], task)
+        with patch.object(app, "TASKS", task_manager):
+            result = app.add_collection_papers("bundle", {"papers": [paper]})
+        self.assertEqual(result["task_count"], 1)
+        task = next(iter(task_manager.tasks.values()))
+        self.assertEqual(Path(task["reuse_from"]), reusable)
+        manifest = app.project_manifest(directory)
+        self.assertEqual(manifest["papers"][0]["citation_key"], "article-2")
+
+    def test_append_collection_skips_duplicate_and_delete_removes_one_paper(self):
+        paper = {**self.paper, "citation_key": "article"}
+        directory = self.collection(papers=[{
+            "citation_key": "article", "metadata": paper,
+            "source": {"path": str(self.pdf), "zotero_item_key": "ITEM1"},
+        }])
+        paper_dir = directory / "papers" / "article"
+        paper_dir.mkdir()
+        (paper_dir / "manifest.json").write_text(json.dumps({"project_type": "paper", "citation_key": "article"}))
+        task_manager = SimpleNamespace(lock=threading.Lock(), tasks={})
+        task_manager.add = lambda task: task_manager.tasks.__setitem__(task["id"], task)
+        with patch.object(app, "TASKS", task_manager):
+            result = app.add_collection_papers("bundle", {"papers": [paper]})
+            self.assertEqual(result["skipped"], ["article"])
+            deleted = app.delete_collection_paper("bundle", "article")
+        self.assertEqual(deleted["article_count"], 0)
+        self.assertFalse(paper_dir.exists())
+        self.assertEqual(app.project_manifest(directory)["papers"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

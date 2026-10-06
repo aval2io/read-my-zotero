@@ -1470,7 +1470,90 @@ function TasksView({ tasks, refresh, onOpenCodexTask }) {
   );
 }
 
-function ProjectDetail({ details, onClose, onOpenZotero, onDeleteProject }) {
+function AddCollectionPapersDialog({ projectName, onClose, onAdded }) {
+  const dialogRef = useRef(null);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [selected, setSelected] = useState(new Map());
+  const [translate, setTranslate] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!projectName || !dialogRef.current) return undefined;
+    dialogRef.current.showModal();
+    return () => {
+      if (dialogRef.current?.open) dialogRef.current.close();
+    };
+  }, [projectName]);
+  useEffect(() => {
+    if (!query.trim()) {
+      setResults([]);
+      return undefined;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const data = await api(`/api/search?q=${encodeURIComponent(query.trim())}`, { signal: controller.signal });
+        if (!controller.signal.aborted) setResults(data.items || []);
+      } catch (cause) {
+        if (!controller.signal.aborted) setError(cause.message);
+      }
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query]);
+  const toggle = (item) => setSelected((previous) => {
+    const next = new Map(previous);
+    next.has(item.zotero_item_key) ? next.delete(item.zotero_item_key) : next.set(item.zotero_item_key, item);
+    return next;
+  });
+  const submit = async (event) => {
+    event.preventDefault();
+    if (!selected.size || submitting) return;
+    setSubmitting(true);
+    setError("");
+    try {
+      const papers = [...selected.values()].map((item) => ({ ...item, path: item.pdfs[0] }));
+      const result = await api("/api/project/papers", {
+        method: "POST",
+        body: JSON.stringify({ project: projectName, papers, translate }),
+      });
+      await onAdded(result);
+      onClose();
+    } catch (cause) {
+      setError(cause.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+  return (
+    <dialog ref={dialogRef} className="detail-dialog collection-paper-dialog" onCancel={(event) => { event.preventDefault(); if (!submitting) onClose(); }}>
+      <form onSubmit={submit}>
+        <header className="detail-header">
+          <div><div className="eyebrow">ADD ARTICLES</div><h2>追加文章</h2></div>
+          <button type="button" className="icon-button detail-close" onClick={onClose} disabled={submitting} aria-label="关闭"><X size={17} /></button>
+        </header>
+        <p className="muted">从 Zotero 搜索带 PDF 的文章。已处理过的单篇项目会自动复用 Markdown 和图片。</p>
+        <div className="search-box collection-paper-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、作者、DOI 或 citation key" autoFocus /></div>
+        <div className="collection-paper-results">
+          {results.length ? results.map((item) => (
+            <label className={cn("item-card", !item.has_pdf && "disabled")} key={item.zotero_item_key}>
+              <input type="checkbox" disabled={!item.has_pdf || submitting} checked={selected.has(item.zotero_item_key)} onChange={() => toggle(item)} />
+              <div><strong>{item.title || "未命名条目"}</strong><div className="item-meta">{item.authors || "作者未知"} · {formatDate(item.date)}{item.citation_key && ` · ${item.citation_key}`}</div><small className={item.has_pdf ? "pdf-ready" : "pdf-missing"}>{item.has_pdf ? `${item.pdfs.length} 个 PDF 附件` : "没有可用 PDF 附件"}</small></div>
+            </label>
+          )) : <div className="empty-small">输入关键词搜索 Zotero 文章</div>}
+        </div>
+        <label className="check"><input type="checkbox" checked={translate} onChange={(event) => setTranslate(event.target.checked)} disabled={submitting} /> 同时生成中文翻译</label>
+        {error && <div className="error-banner folder-error" role="alert"><CircleHelp size={16} />{error}</div>}
+        <footer className="folder-footer"><button type="button" className="button ghost" onClick={onClose} disabled={submitting}>取消</button><button type="submit" className="button primary" disabled={submitting || !selected.size}>{submitting ? <LoaderCircle size={16} /> : <Plus size={16} />}{submitting ? "加入中..." : `追加 ${selected.size} 篇文章`}</button></footer>
+      </form>
+    </dialog>
+  );
+}
+
+function ProjectDetail({ details, onClose, onOpenZotero, onDeleteProject, onRefreshProject }) {
   const project = details?.project || {};
   const papers = details?.papers || [];
   const projectName = project.name || project.citation_key || "";
@@ -1483,6 +1566,7 @@ function ProjectDetail({ details, onClose, onOpenZotero, onDeleteProject }) {
   const [activeRunId, setActiveRunId] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
+  const [addPapersOpen, setAddPapersOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -1493,6 +1577,7 @@ function ProjectDetail({ details, onClose, onOpenZotero, onDeleteProject }) {
     setCodexOpen(false);
     setActiveRunId("");
     setNotice("");
+    setAddPapersOpen(false);
     if (!details) return undefined;
     Promise.all([
       api(`/api/project/outputs?name=${encodeURIComponent(projectName)}`),
@@ -1659,6 +1744,20 @@ function ProjectDetail({ details, onClose, onOpenZotero, onDeleteProject }) {
     if (!activeRunId && runs[0]) setActiveRunId(runs[0].id);
   };
 
+  const deletePaper = async (paper) => {
+    if (!window.confirm(`确定从项目中删除“${paper.metadata?.title || paper.citation_key}”？`)) return;
+    setBusy(`delete:${paper.citation_key}`);
+    try {
+      await api("/api/project/paper/delete", { method: "POST", body: JSON.stringify({ project: projectName, citation_key: paper.citation_key }) });
+      setNotice("文章已从项目中删除");
+      await onRefreshProject?.(projectName);
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setBusy("");
+    }
+  };
+
   if (!details) return null;
   return (
     <div
@@ -1730,6 +1829,12 @@ function ProjectDetail({ details, onClose, onOpenZotero, onDeleteProject }) {
             <Terminal size={15} />
             进行 Codex 会话
           </button>
+          {project.project_type === "collection" && (
+            <button className="button ghost" onClick={() => setAddPapersOpen(true)}>
+              <Plus size={15} />
+              追加文章
+            </button>
+          )}
           {runs.length > 0 && (
             <button className="button ghost" onClick={showCodex}>
               <Eye size={15} />
@@ -1800,6 +1905,11 @@ function ProjectDetail({ details, onClose, onOpenZotero, onDeleteProject }) {
                           打开翻译
                         </button>
                       )}
+                    {project.project_type === "collection" && (
+                      <button className="icon-button delete-icon-button" onClick={() => deletePaper(paper)} disabled={busy === `delete:${paper.citation_key}`} title="从项目中删除" aria-label={`删除 ${metadata.title || paper.citation_key}`}>
+                        {busy === `delete:${paper.citation_key}` ? <LoaderCircle size={13} /> : <Trash2 size={13} />}
+                      </button>
+                    )}
                   </div>
                 </div>
                 {metadata.abstract && (
@@ -2012,6 +2122,7 @@ function ProjectDetail({ details, onClose, onOpenZotero, onDeleteProject }) {
           </button>
         </footer>
       </section>
+      {addPapersOpen && <AddCollectionPapersDialog projectName={projectName} onClose={() => setAddPapersOpen(false)} onAdded={async (result) => { setNotice(`已追加 ${result.task_count} 篇文章${result.skipped?.length ? `，跳过 ${result.skipped.length} 篇重复文章` : ""}`); await onRefreshProject?.(projectName); }} />}
     </div>
   );
 }
@@ -2561,6 +2672,7 @@ export default function Page() {
       <ProjectDetail
         details={projectDetails}
         onClose={() => setProjectDetails(null)}
+        onRefreshProject={openProject}
         onOpenZotero={() => {
           setProjectDetails(null);
           setView("zotero");

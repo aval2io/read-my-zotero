@@ -64,6 +64,30 @@ function projectStatus(project) {
       : ["ready", "已就绪"];
 }
 
+function projectPaperTitle(project) {
+  return (
+    project.metadata?.title ||
+    project.title ||
+    project.papers?.[0]?.metadata?.title ||
+    project.papers?.[0]?.title ||
+    ""
+  );
+}
+
+function projectDisplayName(project, nameMode = "citation") {
+  const name = project.name || project.citation_key || "";
+  // A paper project is automatically named from its citation key at creation
+  // time. Collection names and renamed projects must remain untouched.
+  const isAutomaticPaperName =
+    project.project_type === "paper" &&
+    Boolean(project.citation_key) &&
+    name === project.citation_key;
+  if (nameMode === "title" && isAutomaticPaperName) {
+    return projectPaperTitle(project) || name;
+  }
+  return name;
+}
+
 function TreeNode({
   item,
   childrenByParent,
@@ -398,6 +422,24 @@ function ProjectsView({
 }) {
   const [filter, setFilter] = useState("");
   const [sortMode, setSortMode] = useState("created_desc");
+  const [nameMode, setNameMode] = useState("citation");
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("read-my-zotero-project-name-mode");
+      if (saved === "title" || saved === "citation") setNameMode(saved);
+    } catch {
+      // localStorage can be unavailable in private browsing contexts.
+    }
+  }, []);
+  const changeNameMode = (event) => {
+    const next = event.target.checked ? "title" : "citation";
+    setNameMode(next);
+    try {
+      window.localStorage.setItem("read-my-zotero-project-name-mode", next);
+    } catch {
+      // The preference still applies for the current page session.
+    }
+  };
   const visible = useMemo(() => {
     const filtered = projects
       .filter((project) =>
@@ -410,7 +452,7 @@ function ProjectsView({
               : (project.folder_ids || []).includes(folderId),
       )
       .filter((project) =>
-        `${project.name} ${project.tags?.join(" ")}`
+        `${projectDisplayName(project, nameMode)} ${project.name} ${project.tags?.join(" ")}`
           .toLowerCase()
           .includes(filter.toLowerCase()),
       );
@@ -418,7 +460,7 @@ function ProjectsView({
       const parsed = Date.parse(value || "");
       return Number.isNaN(parsed) ? 0 : parsed;
     };
-    const nameValue = (project) => project.name || project.citation_key || "";
+    const nameValue = (project) => projectDisplayName(project, nameMode);
     return [...filtered].sort((left, right) => {
       if (sortMode === "name_asc")
         return nameValue(left).localeCompare(nameValue(right), "zh-Hans-CN", {
@@ -455,7 +497,7 @@ function ProjectsView({
         nameValue(left).localeCompare(nameValue(right))
       );
     });
-  }, [projects, folderId, filter, sortMode]);
+  }, [projects, folderId, filter, sortMode, nameMode]);
   const counts = {
     total: projects.length,
     unfiled: projects.filter((project) => !(project.folder_ids || []).length)
@@ -492,6 +534,14 @@ function ProjectsView({
           />
         </div>
         <div className="project-toolbar-actions">
+          <label className="name-mode-toggle" title="切换项目列表中的名称显示方式">
+            <input
+              type="checkbox"
+              checked={nameMode === "title"}
+              onChange={changeNameMode}
+            />
+            <span>显示论文标题</span>
+          </label>
           <label className="sort-control" title="项目排序">
             <ArrowUpDown size={15} />
             <select
@@ -526,7 +576,8 @@ function ProjectsView({
           visible.map((project) => {
             const [status, label] = projectStatus(project);
             const projectName = project.name || project.citation_key;
-            const paperTitle = project.metadata?.title || project.title || project.papers?.[0]?.metadata?.title || project.papers?.[0]?.title || projectName;
+            const displayName = projectDisplayName(project, nameMode);
+            const paperTitle = projectPaperTitle(project) || projectName;
             const isRead = project.todo_read && !project.todo;
             const todoLabel = todoOnly
               ? "移除TODO"
@@ -558,7 +609,7 @@ function ProjectsView({
                       title={paperTitle}
                       onClick={() => onOpenProject(projectName)}
                     >
-                      {projectName}
+                      {displayName}
                     </button>
                     <small>
                       {project.tags?.map((tag) => (

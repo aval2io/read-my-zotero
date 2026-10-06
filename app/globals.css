@@ -132,6 +132,9 @@ dialog.detail-dialog::backdrop { background:rgba(18,39,43,.34); backdrop-filter:
 }
 
 .project-toolbar-actions { display:flex; align-items:center; gap:12px; }
+.name-mode-toggle { display:flex; align-items:center; gap:7px; min-height:37px; padding:0 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--muted); font-size:12px; white-space:nowrap; cursor:pointer; }
+.name-mode-toggle input { accent-color:var(--accent); }
+.name-mode-toggle:has(input:checked) { border-color:#abd7cc; background:var(--accent-soft); color:var(--accent-dark); }
 .sort-control { display:flex; align-items:center; gap:6px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--muted); padding:0 9px; }
 .sort-control select { border:0; outline:0; background:transparent; color:var(--ink); padding:9px 2px; }
 @media (max-width:720px) { .project-toolbar-actions { width:100%; justify-content:space-between; } }

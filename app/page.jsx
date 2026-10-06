@@ -683,7 +683,10 @@ function ProjectsView({
                 </button>
                 <span className="muted">{project.article_count || 1}</span>
                 <span
-                  className="project-indicator"
+                  className={cn(
+                    "project-indicator",
+                    project.output_count > 0 && "has-output",
+                  )}
                   title={`${project.output_count || 0} 个 outputs 文件`}
                 >
                   <FileText size={13} />

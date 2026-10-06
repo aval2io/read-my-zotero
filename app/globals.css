@@ -157,6 +157,7 @@ dialog.detail-dialog::backdrop { background:rgba(18,39,43,.34); backdrop-filter:
 
 .project-indicator { display:inline-flex; align-items:center; justify-content:center; gap:4px; color:var(--muted); font-size:11px; white-space:nowrap; }
 .project-indicator.is-ready { color:#9a741f; background:#fff5cc; border:1px solid #eadb9b; border-radius:999px; padding:3px 7px; font-weight:700; }
+.project-indicator.has-output { color:#39728f; background:#e8f4fb; border:1px solid #b9dceb; border-radius:999px; padding:3px 7px; font-weight:700; }
 .project-created { color:var(--muted); font-size:11px; white-space:nowrap; }
 .detail-paper-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:6px; }
 .translation-button { display:inline-flex; align-items:center; gap:5px; font-size:11px; }

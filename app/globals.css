@@ -135,6 +135,9 @@ dialog.detail-dialog::backdrop { background:rgba(18,39,43,.34); backdrop-filter:
 .name-mode-toggle { display:flex; align-items:center; gap:7px; min-height:37px; padding:0 10px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--muted); font-size:12px; white-space:nowrap; cursor:pointer; }
 .name-mode-toggle input { accent-color:var(--accent); }
 .name-mode-toggle:has(input:checked) { border-color:#abd7cc; background:var(--accent-soft); color:var(--accent-dark); }
+.workspace-delete { display:grid; place-items:center; width:22px; height:24px; padding:0; border:0; border-radius:5px; background:transparent; color:#a0adad; opacity:0; }
+.workspace-node:hover .workspace-delete,.workspace-node.active .workspace-delete,.workspace-delete:focus-visible { opacity:1; }
+.workspace-delete:hover { background:#fff0ee; color:#a8574d; }
 .sort-control { display:flex; align-items:center; gap:6px; border:1px solid var(--line); border-radius:8px; background:#fff; color:var(--muted); padding:0 9px; }
 .sort-control select { border:0; outline:0; background:transparent; color:var(--ink); padding:9px 2px; }
 @media (max-width:720px) { .project-toolbar-actions { width:100%; justify-content:space-between; } }

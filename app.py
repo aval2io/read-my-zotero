@@ -266,16 +266,20 @@ def delete_folder(folder_id: str) -> dict:
     with FOLDER_LOCK:
         index = load_folder_index()
         folder = _folder_by_id(index, folder_id)
-        replacement = folder.get("parent_id")
-        for item in index["folders"]:
-            if item.get("parent_id") == folder_id:
-                item["parent_id"] = replacement
-        index["folders"] = [item for item in index["folders"] if item["id"] != folder_id]
+        # Removing a folder also removes its child folders. Projects that were
+        # assigned anywhere in that subtree simply lose those assignments and
+        # therefore appear under “未分类”; no project files are touched.
+        removed_ids = _folder_descendants(index, folder_id)
+        index["folders"] = [item for item in index["folders"] if item["id"] not in removed_ids]
+        affected_projects = 0
         for project, folder_ids in list(index["project_folders"].items()):
-            updated = [replacement if item_id == folder_id and replacement else item_id for item_id in folder_ids if item_id != folder_id or replacement]
-            index["project_folders"][project] = list(dict.fromkeys(updated))
+            if removed_ids.intersection(folder_ids):
+                # Any project in the deleted subtree becomes completely
+                # unclassified, even if it also had another folder tag.
+                index["project_folders"].pop(project, None)
+                affected_projects += 1
         save_folder_index(index)
-        return {"id": folder_id, "name": folder["name"], "removed": 1}
+        return {"id": folder_id, "name": folder["name"], "removed": len(removed_ids), "removed_ids": sorted(removed_ids), "affected_projects": affected_projects}
 
 
 def set_project_folders(project_name: str, folder_ids: list[str]) -> list[str]:

@@ -190,7 +190,7 @@ function ZoteroTree({ collections, selected, onSelect }) {
   );
 }
 
-function WorkspaceTree({ folders, counts, selected, onSelect }) {
+function WorkspaceTree({ folders, counts, selected, onSelect, onDelete }) {
   const [expanded, setExpanded] = useState(new Set());
   const childrenByParent = useMemo(
     () =>
@@ -237,6 +237,7 @@ function WorkspaceTree({ folders, counts, selected, onSelect }) {
           onToggle={toggle}
           depth={0}
           counts={counts}
+          onDelete={onDelete}
         />
       ))}
     </div>
@@ -252,6 +253,7 @@ function WorkspaceNode({
   onToggle,
   depth,
   counts,
+  onDelete,
 }) {
   const children = childrenByParent[item.id] || [];
   const open = expanded.has(item.id);
@@ -280,6 +282,17 @@ function WorkspaceNode({
           <span>{item.name}</span>
         </button>
         <b>{counts.byFolder?.[item.id] || 0}</b>
+        <button
+          className="workspace-delete"
+          title={`删除目录 ${item.name}`}
+          aria-label={`删除目录 ${item.name}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete?.(item);
+          }}
+        >
+          <Trash2 size={13} />
+        </button>
       </div>
       {children.length > 0 && (
         <div
@@ -299,6 +312,7 @@ function WorkspaceNode({
                 onToggle={onToggle}
                 depth={depth + 1}
                 counts={counts}
+                onDelete={onDelete}
               />
             ))}
           </div>
@@ -2605,6 +2619,20 @@ export default function Page() {
     setProjectDetails(null);
     setDeleteTarget(name);
   };
+  const deleteFolder = async (folder) => {
+    if (!window.confirm(`删除目录“${folder.name}”？其中的子目录和文章会移到未分类。`)) return;
+    try {
+      setError("");
+      const result = await api("/api/folders", {
+        method: "POST",
+        body: JSON.stringify({ action: "delete", id: folder.id }),
+      });
+      if ((result.removed_ids || []).includes(folderId)) setFolderId("");
+      await loadWorkspace();
+    } catch (cause) {
+      setError(cause.message);
+    }
+  };
   const workspaceSidebar = (
     <section className="sidebar-block">
       <div className="sidebar-block-head">
@@ -2630,6 +2658,7 @@ export default function Page() {
           setFolderId(value);
           setView("projects");
         }}
+        onDelete={deleteFolder}
       />
     </section>
   );

@@ -741,6 +741,101 @@ def delete_project(name: str) -> dict:
     return {"name": project_slug}
 
 
+def copy_project(name: str, folder_ids: list[str]) -> dict:
+    """Deep-copy a project into another in-app workspace directory."""
+    project_slug = slug(name)
+    source_dir = safe_project_dir(project_slug)
+    if not source_dir.is_dir() or not project_manifest(source_dir):
+        raise ValueError(f"找不到项目：{project_slug}")
+    states = project_task_state(project_slug)
+    if any(state in {"queued", "running", "cancelling"} for state in states):
+        raise ValueError("项目仍有任务处理中，请等待任务完成后再复制")
+    if not isinstance(folder_ids, list) or not folder_ids:
+        raise ValueError("请选择目标工作区目录")
+    folder_index = load_folder_index()
+    available = {folder["id"] for folder in folder_index["folders"]}
+    target_ids = list(dict.fromkeys(str(folder_id) for folder_id in folder_ids))
+    if any(folder_id not in available for folder_id in target_ids):
+        raise ValueError("目标工作区目录不存在")
+
+    base_name = slug(f"{project_slug}-copy")
+    copied_name = base_name
+    counter = 2
+    while (WORKSPACES / copied_name).exists():
+        copied_name = f"{base_name}-{counter}"
+        counter += 1
+    destination_dir = (WORKSPACES / copied_name).resolve()
+
+    try:
+        shutil.copytree(source_dir, destination_dir, symlinks=False)
+    except Exception:
+        # Do not leave a partially copied project behind after an I/O error.
+        shutil.rmtree(destination_dir, ignore_errors=True)
+        raise
+    source_path = str(source_dir.resolve())
+    destination_path = str(destination_dir.resolve())
+    copied_name = destination_dir.name
+    # Keep every manifest self-contained after the copy.  Collection paper
+    # manifests use the same path field as root manifests, so update all of
+    # them while leaving source PDF references untouched.
+    root_manifest_path = destination_dir / "manifest.json"
+    for manifest_path in destination_dir.rglob("manifest.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if manifest.get("name") == project_slug:
+            manifest["name"] = copied_name
+        manifest_path_value = manifest.get("path")
+        if manifest_path == root_manifest_path:
+            manifest["path"] = destination_path
+        elif manifest_path_value:
+            try:
+                manifest_path_resolved = Path(str(manifest_path_value)).expanduser().resolve()
+                relative_manifest_path = manifest_path_resolved.relative_to(source_dir.resolve())
+            except (OSError, ValueError):
+                relative_manifest_path = None
+            if relative_manifest_path is not None:
+                suffix = "" if str(relative_manifest_path) == "." else os.sep + str(relative_manifest_path)
+                manifest["path"] = destination_path + suffix
+        try:
+            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+    set_project_folders(copied_name, target_ids)
+    return {"name": copied_name, "path": destination_path, "source": project_slug, "folder_ids": target_ids}
+
+
+def copy_paper_directory(source_dir: Path, source_project: str, folder_ids: list[str]) -> dict:
+    """Copy one paper artifact directory into a new single-paper project."""
+    source_manifest = project_manifest(source_dir)
+    if not source_manifest:
+        raise ValueError("找不到可复制的论文项目")
+    states = project_task_state(source_project)
+    if any(state in {"queued", "running", "cancelling"} for state in states):
+        raise ValueError("源项目仍有任务处理中，请等待任务完成后再复制")
+    base_name = slug(f"{source_dir.name}-copy")
+    copied_name = base_name
+    counter = 2
+    while (WORKSPACES / copied_name).exists():
+        copied_name = f"{base_name}-{counter}"
+        counter += 1
+    destination_dir = WORKSPACES / copied_name
+    try:
+        shutil.copytree(source_dir, destination_dir, symlinks=False)
+    except Exception:
+        shutil.rmtree(destination_dir, ignore_errors=True)
+        raise
+    manifest = dict(source_manifest)
+    manifest["project_type"] = "paper"
+    manifest["name"] = copied_name
+    manifest["path"] = str(destination_dir.resolve())
+    (destination_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    target_ids = list(dict.fromkeys(str(folder_id) for folder_id in folder_ids))
+    set_project_folders(copied_name, target_ids)
+    return {"name": copied_name, "path": str(destination_dir.resolve()), "source": source_project, "folder_ids": target_ids}
+
+
 def extract_markdown_abstract(markdown_path: Path) -> str:
     """Extract an Abstract section when the source metadata has no abstract."""
     try:
@@ -1519,6 +1614,47 @@ def matching_paper_project(paper: dict) -> tuple[str, dict] | None:
     return None
 
 
+def paper_full_title(paper: dict) -> str:
+    metadata = paper.get("metadata") or {}
+    return str(paper.get("title") or metadata.get("title") or "").strip()
+
+
+def matching_paper_title_project(paper: dict, folder_ids: list[str] | None = None) -> tuple[str, dict, Path] | None:
+    """Find a project containing the same full title, optionally in target folders."""
+    title = paper_full_title(paper)
+    if not title:
+        return None
+    target_ids = {str(folder_id) for folder_id in folder_ids} if folder_ids is not None else None
+    index = load_folder_index()
+    for directory in sorted(WORKSPACES.iterdir() if WORKSPACES.exists() else [], key=lambda item: item.name):
+        if not directory.is_dir() or directory.name.startswith("."):
+            continue
+        manifest = project_manifest(directory)
+        if not manifest:
+            continue
+        project_name = str(manifest.get("name") or directory.name)
+        memberships = set(index["project_folders"].get(project_name, []))
+        if target_ids is not None and not target_ids.intersection(memberships):
+            continue
+        if manifest.get("project_type") == "paper":
+            existing_title = str((manifest.get("metadata") or {}).get("title") or manifest.get("title") or "").strip()
+            if existing_title and existing_title == title:
+                return project_name, manifest, directory
+            continue
+        if manifest.get("project_type") == "collection":
+            for item in manifest.get("papers", []):
+                metadata = item.get("metadata") or {}
+                existing_title = str(item.get("title") or metadata.get("title") or "").strip()
+                if existing_title and existing_title == title:
+                    return project_name, manifest, directory / "papers" / str(item.get("citation_key") or "")
+    return None
+
+
+def matching_paper_project_in_folders(paper: dict, folder_ids: list[str]) -> tuple[str, dict] | None:
+    match = matching_paper_title_project(paper, folder_ids)
+    return match[:2] if match else None
+
+
 def _create_project(payload: dict) -> dict:
     project_type = payload.get("project_type", "paper")
     papers = payload.get("papers", [])
@@ -1535,14 +1671,52 @@ def _create_project(payload: dict) -> dict:
         available = {folder["id"] for folder in index["folders"]}
         if any(str(folder_id) not in available for folder_id in requested_folder_ids):
             raise ValueError("目标工作区目录不存在，请刷新后重试")
+        match = matching_paper_project_in_folders(papers[0], requested_folder_ids)
+        if match:
+            existing_name, _ = match
+            title = paper_full_title(papers[0])
+            return {
+                "name": existing_name,
+                "path": str(WORKSPACES / existing_name),
+                "task_count": 0,
+                "outcome": "skipped",
+                "skipped_title": title,
+                "skipped_titles": [title],
+            }
+        source_match = matching_paper_title_project(papers[0])
+        if source_match:
+            source_name, source_manifest, source_paper_dir = source_match
+            if source_manifest.get("project_type") == "paper":
+                copied = copy_project(source_name, [str(folder_id) for folder_id in requested_folder_ids])
+            else:
+                copied = copy_paper_directory(source_paper_dir, source_name, [str(folder_id) for folder_id in requested_folder_ids])
+            return {
+                **copied,
+                "task_count": 0,
+                "outcome": "copied",
+                "copied_from": source_name,
+                "copied_title": paper_full_title(papers[0]),
+            }
+        # Older manifests created before title metadata was persisted need the
+        # previous identity fallback. New Zotero records always carry a title
+        # and therefore use the folder-scoped title check above.
+        if not paper_full_title(papers[0]):
+            legacy_match = matching_paper_project(papers[0])
+            if legacy_match:
+                existing_name, _ = legacy_match
+                current = index["project_folders"].get(existing_name, [])
+                missing = [str(folder_id) for folder_id in requested_folder_ids if str(folder_id) not in current]
+                if missing:
+                    add_project_folders(existing_name, missing)
+                return {"name": existing_name, "path": str(WORKSPACES / existing_name), "task_count": 0, "outcome": "linked" if missing else "skipped"}
+        # Keep the legacy no-target behavior for callers that do not provide
+        # a workspace directory. With a target directory, an existing project
+        # elsewhere is deliberately allowed and receives a unique name below.
+    if project_type == "paper" and payload.get("skip_existing") and not requested_folder_ids:
         match = matching_paper_project(papers[0])
         if match:
             existing_name, _ = match
-            current = index["project_folders"].get(existing_name, [])
-            missing = [str(folder_id) for folder_id in requested_folder_ids if str(folder_id) not in current]
-            if missing:
-                add_project_folders(existing_name, missing)
-            return {"name": existing_name, "path": str(WORKSPACES / existing_name), "task_count": 0, "outcome": "linked" if missing else "skipped"}
+            return {"name": existing_name, "path": str(WORKSPACES / existing_name), "task_count": 0, "outcome": "skipped", "skipped_title": paper_full_title(papers[0])}
     for paper in papers:
         path = Path(paper["path"]).expanduser()
         if not path.exists() or path.suffix.lower() != ".pdf":
@@ -1561,6 +1735,13 @@ def _create_project(payload: dict) -> dict:
             name = f"{base_name}-workspace" if counter == 2 and requested_name else f"{base_name}-{counter}"
             counter += 1
     project_dir = WORKSPACES / name
+    if project_type == "paper" and payload.get("skip_existing") and paper_full_title(papers[0]):
+        base_name = name
+        counter = 2
+        while project_dir.exists():
+            name = f"{base_name}-{counter}"
+            project_dir = WORKSPACES / name
+            counter += 1
     existing_manifest = project_manifest(project_dir) if project_dir.exists() else None
     if project_dir.exists() and existing_manifest:
         if project_type != existing_manifest.get("project_type"):
@@ -1940,6 +2121,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(rename_project(payload.get("name", ""), payload.get("new_name", "")))
             elif parsed.path == "/api/delete":
                 self.send_json(delete_project(self.read_json().get("name", "")))
+            elif parsed.path == "/api/copy":
+                payload = self.read_json()
+                self.send_json(copy_project(payload.get("name", ""), payload.get("folder_ids") or []), 201)
             elif parsed.path == "/api/config":
                 payload = self.read_json()
                 if payload.get("zotero_dir"):

@@ -840,6 +840,105 @@ function DeleteProjectDialog({ projectName, onClose, onDeleted }) {
   );
 }
 
+function CopyProjectDialog({ projectName, folders, onClose, onCopied }) {
+  const dialogRef = useRef(null);
+  const [destination, setDestination] = useState("");
+  const [copying, setCopying] = useState(false);
+  const [error, setError] = useState("");
+  const folderLabels = useMemo(() => {
+    const byId = new Map((folders || []).map((folder) => [folder.id, folder]));
+    const labels = new Map();
+    const labelFor = (folder) => {
+      if (labels.has(folder.id)) return labels.get(folder.id);
+      const parent = folder.parent_id && byId.get(folder.parent_id);
+      const label = parent ? `${labelFor(parent)} / ${folder.name}` : folder.name;
+      labels.set(folder.id, label);
+      return label;
+    };
+    (folders || []).forEach(labelFor);
+    return labels;
+  }, [folders]);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!projectName || !dialog) return;
+    setDestination("");
+    setError("");
+    dialog.showModal();
+    return () => dialog.close();
+  }, [projectName]);
+  const copy = async (event) => {
+    event.preventDefault();
+    if (copying) return;
+    setCopying(true);
+    setError("");
+    try {
+      const result = await api("/api/copy", {
+        method: "POST",
+        body: JSON.stringify({ name: projectName, folder_ids: destination ? [destination] : [] }),
+      });
+      await onCopied(result);
+    } catch (cause) {
+      setError(cause.message);
+    } finally {
+      setCopying(false);
+    }
+  };
+  return (
+    <dialog
+      ref={dialogRef}
+      className="detail-dialog copy-project-dialog"
+      aria-labelledby="copy-project-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!copying) onClose();
+      }}
+    >
+      <form onSubmit={copy}>
+        <header className="detail-header">
+          <div>
+            <div className="eyebrow">COPY PROJECT</div>
+            <h2 id="copy-project-title">复制项目</h2>
+          </div>
+          <button
+            type="button"
+            className="icon-button detail-close"
+            aria-label="关闭"
+            disabled={copying}
+            onClick={onClose}
+          >
+            <X size={17} />
+          </button>
+        </header>
+        <p className="delete-project-copy">
+          将完整复制 <strong>{projectName}</strong> 的 OCR、翻译、图片和 outputs 到另一个工作区目录。副本中的文件与源项目相互独立。
+        </p>
+        <label className="copy-project-field">
+          目标工作区目录
+          <select autoFocus value={destination} onChange={(event) => setDestination(event.target.value)} disabled={copying}>
+            <option value="">请选择目录</option>
+            {(folders || []).map((folder) => <option key={folder.id} value={folder.id}>{folderLabels.get(folder.id) || folder.name}</option>)}
+          </select>
+        </label>
+        {error && (
+          <div className="error-banner folder-error" role="alert">
+            <CircleHelp size={16} />
+            {error}
+          </div>
+        )}
+        <footer className="folder-footer">
+          <button type="button" className="button ghost" disabled={copying} onClick={onClose}>
+            取消
+          </button>
+          <button type="submit" className="button primary" disabled={copying || !destination}>
+            {copying ? <LoaderCircle size={16} /> : <Copy size={15} />}
+            {copying ? "复制中文件..." : "开始复制"}
+          </button>
+        </footer>
+      </form>
+    </dialog>
+  );
+}
+
 function ZoteroView({
   collections,
   folders,
@@ -1740,9 +1839,11 @@ function AddCollectionPapersDialog({ projectName, onClose, onAdded }) {
 
 function ProjectDetail({
   details,
+  folders,
   onClose,
   onOpenZotero,
   onDeleteProject,
+  onCopyProject,
   onRefreshProject,
 }) {
   const project = details?.project || {};
@@ -2006,6 +2107,10 @@ function ProjectDetail({
           >
             <Copy size={15} />
             复制目录路径
+          </button>
+          <button className="button ghost" onClick={() => onCopyProject(projectName)}>
+            <Copy size={15} />
+            复制项目
           </button>
           <button className="button ghost" onClick={showOutputs}>
             <FileText size={15} />
@@ -2806,6 +2911,7 @@ export default function Page() {
   const [importResult, setImportResult] = useState("");
   const [folderDialogOpen, setFolderDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState("");
+  const [copyTarget, setCopyTarget] = useState("");
   const [batchCodexFolder, setBatchCodexFolder] = useState(null);
   const loadWorkspace = useCallback(async () => {
     const [projectData, folderResponse] = await Promise.all([
@@ -2883,7 +2989,8 @@ export default function Page() {
     autoCodex,
     prompt,
   }) => {
-    const counts = { created: 0, linked: 0, skipped: 0 };
+    const counts = { created: 0, linked: 0, skipped: 0, copied: 0 };
+    const skippedTitles = [];
     try {
       setError("");
       setImportResult("");
@@ -2918,12 +3025,15 @@ export default function Page() {
             }),
           });
           counts[result.outcome || "created"] += 1;
+          if (result.outcome === "skipped") {
+            const titles = result.skipped_titles?.length
+              ? result.skipped_titles
+              : [result.skipped_title || paper.title || "未命名文章"];
+            skippedTitles.push(...titles);
+          }
           if (autoCodex && result.name && result.outcome === "created") {
             autoCodexProjects.push(result.name);
           }
-          setImportResult(
-            `新建 ${counts.created} 篇 · 加入目录 ${counts.linked} 篇 · 已有跳过 ${counts.skipped} 篇`,
-          );
         }
         if (autoCodexProjects.length) {
           await api("/api/codex/auto", {
@@ -2941,6 +3051,14 @@ export default function Page() {
             papers,
           }),
         });
+      if (mode === "single") {
+        const uniqueSkippedTitles = [...new Set(skippedTitles)];
+        setImportResult(
+          uniqueSkippedTitles.length
+            ? `新建 ${counts.created} 篇 · 复制 ${counts.copied} 篇 · 加入目录 ${counts.linked} 篇 · 跳过 ${uniqueSkippedTitles.length} 篇：${uniqueSkippedTitles.join("、")}`
+            : `新建 ${counts.created} 篇 · 复制 ${counts.copied} 篇 · 加入目录 ${counts.linked} 篇`,
+        );
+      }
       await Promise.all([loadTasks(), loadWorkspace()]);
       setView("tasks");
     } catch (e) {
@@ -2988,6 +3106,20 @@ export default function Page() {
   const requestProjectDeletion = (name) => {
     setProjectDetails(null);
     setDeleteTarget(name);
+  };
+  const requestProjectCopy = (name) => {
+    setProjectDetails(null);
+    setCopyTarget(name);
+  };
+  const copyProject = async (result) => {
+    setCopyTarget("");
+    setError("");
+    try {
+      await loadWorkspace();
+      setImportResult(`项目已复制到 ${result.path}`);
+    } catch (cause) {
+      setError(cause.message);
+    }
   };
   const deleteFolder = async (folder) => {
     if (
@@ -3144,6 +3276,7 @@ export default function Page() {
       )}
       <ProjectDetail
         details={projectDetails}
+        folders={folders}
         onClose={() => setProjectDetails(null)}
         onRefreshProject={openProject}
         onOpenZotero={() => {
@@ -3151,12 +3284,21 @@ export default function Page() {
           setView("zotero");
         }}
         onDeleteProject={requestProjectDeletion}
+        onCopyProject={requestProjectCopy}
       />
       {deleteTarget && (
         <DeleteProjectDialog
           projectName={deleteTarget}
           onClose={() => setDeleteTarget("")}
           onDeleted={deleteProject}
+        />
+      )}
+      {copyTarget && (
+        <CopyProjectDialog
+          projectName={copyTarget}
+          folders={folders}
+          onClose={() => setCopyTarget("")}
+          onCopied={copyProject}
         />
       )}
       {folderDialogOpen && (

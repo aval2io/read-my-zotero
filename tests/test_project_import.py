@@ -121,6 +121,40 @@ class ProjectImportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "项目已存在"):
             self.submit(skip_existing=False)
 
+    def test_title_duplicate_is_skipped_only_in_target_folder(self):
+        existing = self.existing(name="existing-title", key="OTHER", folders=["A"])
+        manifest = app.project_manifest(existing)
+        manifest["metadata"] = {"title": "Exact Paper Title"}
+        (existing / "manifest.json").write_text(json.dumps(manifest))
+        paper = {**self.paper, "zotero_item_key": "NEW", "citation_key": "new-key", "title": "Exact Paper Title"}
+
+        skipped = self.submit(paper, folders=["A"])
+        self.assertEqual(skipped["outcome"], "skipped")
+        self.assertEqual(skipped["skipped_titles"], ["Exact Paper Title"])
+        self.assertFalse((self.workspace / "new-key").exists())
+
+        with patch.object(app, "project_task_state", return_value=[]):
+            created = self.submit(paper, folders=["B"])
+        self.assertEqual(created["outcome"], "copied")
+        self.assertTrue((self.workspace / created["name"]).exists())
+        self.assertEqual(app.load_folder_index()["project_folders"][created["name"]], ["B"])
+
+    def test_existing_project_elsewhere_is_copied_without_new_task(self):
+        source = self.existing(name="source-paper", key="OTHER", folders=["B"])
+        manifest = app.project_manifest(source)
+        manifest["metadata"] = {"title": "Copy Me"}
+        (source / "manifest.json").write_text(json.dumps(manifest))
+        (source / "translation.md").write_text("translation")
+        paper = {**self.paper, "zotero_item_key": "NEW", "citation_key": "copy-me", "title": "Copy Me"}
+        with patch.object(app, "project_task_state", return_value=[]):
+            result = self.submit(paper, folders=["A"])
+        self.assertEqual(result["outcome"], "copied")
+        copied = self.workspace / result["name"]
+        self.assertEqual((copied / "full.md").read_text(), "Existing extraction")
+        self.assertEqual((copied / "translation.md").read_text(), "translation")
+        self.assertEqual(app.load_folder_index()["project_folders"][result["name"]], ["A"])
+        self.tasks.add.assert_not_called()
+
     def test_delete_removes_project_files_and_folder_membership(self):
         directory = self.existing(name="to-delete", folders=["A", "B"])
         (directory / "outputs").mkdir()
@@ -138,6 +172,44 @@ class ProjectImportTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "仍有任务处理中"):
                 app.delete_project("in-progress")
         self.assertTrue(directory.exists())
+
+    def test_copy_project_deep_copies_all_artifacts_and_updates_manifest(self):
+        source = self.existing(name="source-project", folders=["A"])
+        (source / "translation.md").write_text("Translated")
+        (source / "images").mkdir()
+        (source / "images" / "figure.png").write_bytes(b"image")
+        (source / "outputs").mkdir()
+        (source / "outputs" / "report.md").write_text("Report")
+        manifest = app.project_manifest(source)
+        manifest["path"] = str(source)
+        (source / "manifest.json").write_text(json.dumps(manifest))
+        with patch.object(app, "project_task_state", return_value=[]):
+            result = app.copy_project("source-project", ["B"])
+
+        destination = self.workspace / result["name"]
+
+        self.assertEqual(result["name"], "source-project-copy")
+        self.assertEqual((destination / "full.md").read_text(), "Existing extraction")
+        self.assertEqual((destination / "translation.md").read_text(), "Translated")
+        self.assertEqual((destination / "images" / "figure.png").read_bytes(), b"image")
+        self.assertEqual((destination / "outputs" / "report.md").read_text(), "Report")
+        copied_manifest = app.project_manifest(destination)
+        self.assertEqual(copied_manifest["name"], "source-project-copy")
+        self.assertEqual(copied_manifest["path"], str(destination.resolve()))
+        self.assertEqual(app.load_folder_index()["project_folders"]["source-project-copy"], ["B"])
+
+        (destination / "full.md").write_text("Changed copy")
+        (destination / "outputs" / "report.md").unlink()
+        self.assertEqual((source / "full.md").read_text(), "Existing extraction")
+        self.assertTrue((source / "outputs" / "report.md").exists())
+
+    def test_copy_project_rejects_nested_or_existing_destinations(self):
+        source = self.existing(name="source-project")
+        with patch.object(app, "project_task_state", return_value=[]):
+            with self.assertRaisesRegex(ValueError, "请选择目标工作区目录"):
+                app.copy_project("source-project", [])
+            with self.assertRaisesRegex(ValueError, "目标工作区目录不存在"):
+                app.copy_project("source-project", ["missing"])
 
     def collection(self, name="bundle", papers=None):
         directory = self.workspace / name

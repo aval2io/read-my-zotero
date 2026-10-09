@@ -458,12 +458,19 @@ function ProjectsView({
   const [filter, setFilter] = useState("");
   const [sortMode, setSortMode] = useState("created_desc");
   const [nameMode, setNameMode] = useState("citation");
+  const [multiLineTitle, setMultiLineTitle] = useState(false);
   useEffect(() => {
     try {
       const saved = window.localStorage.getItem(
         "read-my-zotero-project-name-mode",
       );
       if (saved === "title" || saved === "citation") setNameMode(saved);
+      const savedTitleLayout = window.localStorage.getItem(
+        "read-my-zotero-project-title-layout",
+      );
+      if (savedTitleLayout === "multiline" || savedTitleLayout === "single-line") {
+        setMultiLineTitle(savedTitleLayout === "multiline");
+      }
     } catch {
       // localStorage can be unavailable in private browsing contexts.
     }
@@ -473,6 +480,18 @@ function ProjectsView({
     setNameMode(next);
     try {
       window.localStorage.setItem("read-my-zotero-project-name-mode", next);
+    } catch {
+      // The preference still applies for the current page session.
+    }
+  };
+  const changeTitleLayout = (event) => {
+    const next = event.target.checked;
+    setMultiLineTitle(next);
+    try {
+      window.localStorage.setItem(
+        "read-my-zotero-project-title-layout",
+        next ? "multiline" : "single-line",
+      );
     } catch {
       // The preference still applies for the current page session.
     }
@@ -580,7 +599,18 @@ function ProjectsView({
               checked={nameMode === "title"}
               onChange={changeNameMode}
             />
-            <span>显示论文标题</span>
+            <span>论文标题</span>
+          </label>
+          <label
+            className="name-mode-toggle"
+            title="以多行显示项目的完整标题"
+          >
+            <input
+              type="checkbox"
+              checked={multiLineTitle}
+              onChange={changeTitleLayout}
+            />
+            <span>多行显示</span>
           </label>
           <label className="sort-control" title="项目排序">
             <ArrowUpDown size={15} />
@@ -601,7 +631,9 @@ function ProjectsView({
           <span className="result-count">{visible.length} 个项目</span>
         </div>
       </div>
-      <section className="project-table">
+      <section
+        className={cn("project-table", multiLineTitle && "show-full-title")}
+      >
         <div className="table-head">
           <span>项目</span>
           <span>TODO</span>
